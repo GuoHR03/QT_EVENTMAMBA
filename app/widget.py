@@ -47,7 +47,7 @@ class MainWindow(QWidget):
         self.start_btn.clicked.connect(self.toggle_camera)
         self.record_btn.clicked.connect(self.toggle_recording)
         self.record_btn.setEnabled(False)
-        self.choice_btn.clicked.connect(self.choose_windowShow)
+        self.ROI_btn.clicked.connect(self.choose_windowShow)
         self.combo_palette.currentTextChanged.connect(self.change_camera)
         self.fpsEdit.valueChanged.connect(self.change_camera)
         self.select_pt_btn.clicked.connect(self.choose_file_pt)
@@ -122,13 +122,15 @@ class MainWindow(QWidget):
         q_img = QImage(cv_img.data, width, height, bytes_per_line, img_format)
         if matched_pred is not None:
             px, py = self._map_pred_to_pixel_crop(matched_pred, width, height)
+            #px, py = self._map_pred_to_pixel_norm(matched_pred, width, height)
             if px is not None and py is not None:
                 painter = QPainter(q_img)
                 pen = QPen(QColor(255, 0, 0))
                 pen.setWidth(3)
                 painter.setPen(pen)
                 painter.setBrush(QColor(255, 0, 0, 80))
-                painter.drawEllipse(px - 8, py - 8, 16, 16)
+                #painter.drawEllipse(px - 8, py - 8, 16, 16)
+                painter.drawEllipse(int(px) - 8, int(py) - 8, 16, 16)
                 painter.end()
 
         pixmap = QPixmap.fromImage(q_img)
@@ -252,6 +254,8 @@ class MainWindow(QWidget):
         x, y = pred
         px = int(x * 512 + 96)
         py = int(y * 512 - 16)
+        px = int(px * 2)
+        py = int(py * 1.5)
         if px < 0 or py < 0 or px >= width or py >= height:
             return None, None
         return px, py
@@ -267,8 +271,16 @@ class MainWindow(QWidget):
         return px, py
 
     def choose_windowShow(self):
+        if hasattr(self, 'new_window') and self.new_window is not None:
+            self.new_window.close()
+            self.new_window.deleteLater()
         self.new_window = choose_Window()
+        self.new_window.roi_applied.connect(self.on_roi_applied)
         self.new_window.show()
+
+    def on_roi_applied(self, roi_x, roi_y, roi_width, roi_height):
+        print(f"[ROI] 获取到参数: x={roi_x}, y={roi_y}, w={roi_width}, h={roi_height}")
+        self.backend.set_roi(roi_x, roi_y, roi_width, roi_height)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

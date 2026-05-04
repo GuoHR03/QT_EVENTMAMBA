@@ -4,7 +4,7 @@ import zmq
 from PyQt6.QtCore import QThread, pyqtSignal
 
 class NetworkThread(QThread):
-    result_signal = pyqtSignal(str, int)
+    result_signal = pyqtSignal(str, object)
 
     def __init__(self, input_queue, host="127.0.0.1", port=5555):
         super().__init__()

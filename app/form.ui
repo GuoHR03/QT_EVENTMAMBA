@@ -46,9 +46,9 @@
     </widget>
    </item>
    <item>
-    <widget class="QPushButton" name="choice_btn">
+    <widget class="QPushButton" name="ROI_btn">
      <property name="text">
-      <string>PushButton</string>
+      <string>ROI</string>
      </property>
     </widget>
    </item>

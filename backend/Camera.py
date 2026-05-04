@@ -1,5 +1,6 @@
 # 通过队列去成像和预测
 
+
 import time
 import queue
 import cv2
@@ -8,6 +9,7 @@ import dv_processing as dv
 import h5py
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
 from metavision_core.event_io.raw_reader import initiate_device
+from libs import metavision_hal
 from metavision_core.event_io import EventsIterator
 from metavision_sdk_core import PeriodicFrameGenerationAlgorithm, ColorPalette
 
@@ -22,21 +24,19 @@ def downSampling_cropping_and_normalization(data_numpy, src_width=640, src_heigh
     x_raw = np.clip(x_raw, 0, 640 - 1)
     y_raw = np.clip(y_raw, 0, 480 - 1)
 
-    # 裁剪 512 * 512
     mask = (x_raw >= 96) & (x_raw <= 608)
     x_values = x_raw[mask] - 96
     y_values = y_raw[mask] + 16
     t_values = data_numpy[:, 2][mask]
-
     x_values = np.clip(x_values, 0, dst_width - 1)
     y_values = np.clip(y_values, 0, dst_height - 1)
 
-    # 归一化
     x_values = x_values / dst_width
     y_values = y_values / dst_height
     t_max = t_values.max()
     t_min = t_values.min()
     t_values = (t_values - t_min) / (t_max - t_min + 1e-5)
+    # 时间轴缩放
     t_values = t_values * 0.1
     return x_values, y_values, t_values
 
@@ -53,6 +53,32 @@ def downSampling_and_normalization(data_numpy, src_width=640, src_height=480, ds
     x_values = x_values / dst_width
     y_values = y_values / dst_height
 
+    t_max = t_values.max()
+    t_min = t_values.min()
+    t_values = (t_values - t_min) / (t_max - t_min + 1e-5)
+    t_values = t_values * 0.1
+    return x_values, y_values, t_values
+
+
+def downSampling_cropping_and_normalization_raw(data_numpy, src_width=1280, src_height=720, dst_width=512, dst_height=512):
+    """进行下采样+裁剪+归一化，适用于RAW 1280x720数据集
+    1280x720 → 映射到 640x480 → x裁剪 [96, 608], y偏移 +16
+    输出尺寸: 512x512
+    """
+    x_raw = data_numpy[:, 0] * (640.0 / src_width)
+    y_raw = data_numpy[:, 1] * (480.0 / src_height)
+    x_raw = np.clip(x_raw, 0, 640 - 1)
+    y_raw = np.clip(y_raw, 0, 480 - 1)
+
+    mask = (x_raw >= 96) & (x_raw <= 608)
+    x_values = x_raw[mask] - 96
+    y_values = y_raw[mask] + 16
+    t_values = data_numpy[:, 2][mask]
+    x_values = np.clip(x_values, 0, dst_width - 1)
+    y_values = np.clip(y_values, 0, dst_height - 1)
+
+    x_values = x_values / dst_width
+    y_values = y_values / dst_height
     t_max = t_values.max()
     t_min = t_values.min()
     t_values = (t_values - t_min) / (t_max - t_min + 1e-5)
@@ -111,9 +137,12 @@ class NNWorker(QThread):
                         nn_events = np.concatenate(buffer)
                         nn_events = np.column_stack((nn_events['x'], nn_events['y'], nn_events['t']))
 
-                        x_norm, y_norm, t_norm = downSampling_cropping_and_normalization(
+                        x_norm, y_norm, t_norm = downSampling_cropping_and_normalization_raw(
                              nn_events, src_width=self.width, src_height=self.height
                         )
+                        # x_norm, y_norm, t_norm = downSampling_cropping_and_normalization(
+                        #      nn_events, src_width=self.width, src_height=self.height
+                        # )
 
                         target_points = 1024
                         if len(x_norm) < target_points:
@@ -125,7 +154,8 @@ class NNWorker(QThread):
                             x_norm = x_norm[indices]
                             y_norm = y_norm[indices]
                             t_norm = t_norm[indices]
-
+                            # t_norm = t_norm * 0.1
+                            
                         clean_array = np.column_stack((t_norm, x_norm, y_norm)).astype(np.float32)
 
                         if self.target_queue.full():
@@ -147,7 +177,7 @@ class CameraThread(QThread):
     """事件读取线程 - 读取事件并分发放到两个队列"""
     finished_signal = pyqtSignal()
 
-    def __init__(self, palette_type="Dark", fps=30, nn_interval_ms=20, target_queue=None, file_path=""):
+    def __init__(self, palette_type="Dark", fps=30, nn_interval_ms=30, target_queue=None, file_path="", roi_params=None):
         super().__init__()
         self.is_running = True
         self.is_recording = False
@@ -167,7 +197,28 @@ class CameraThread(QThread):
 
         self.nn_worker = None
 
+        if roi_params:
+            self.roi_x, self.roi_y, self.roi_width, self.roi_height = roi_params
+        else:
+            self.roi_x, self.roi_y, self.roi_width, self.roi_height = 100, 100, 512, 512
+
         self._init_engine(palette_type)
+
+    def set_roi(self, roi_x, roi_y, roi_width, roi_height):
+        self.roi_x = roi_x
+        self.roi_y = roi_y
+        self.roi_width = roi_width
+        self.roi_height = roi_height
+        if self.device is not None:
+            i_roi = self.device.get_i_roi()
+            if i_roi is not None:
+                try:
+                    roi_window = metavision_hal.I_ROI.Window(roi_x, roi_y, roi_width, roi_height)
+                    i_roi.set_window(roi_window)
+                    i_roi.enable(True)
+                    print(f"[ROI] 动态更新 ROI: x={roi_x}, y={roi_y}, w={roi_width}, h={roi_height}")
+                except Exception as e:
+                    print(f"[ROI] 动态更新失败: {e}")
 
     def _on_cd_frame_cb(self, ts, frame):
         self.image_signal.emit(frame.copy(), int(ts))
@@ -233,11 +284,35 @@ class CameraThread(QThread):
 
         else:
             # metavision 调色盘初始化
+            self.device = None
             try:
                 self.device = initiate_device("")
+            except Exception as e:
+                print(f"[Camera] 连接相机失败: {e}")
+
+            if self.device is not None:
+                i_roi = self.device.get_i_roi()
+                if i_roi is not None:
+                    print("[ROI] 设备支持ROI，正在设置...")
+                    self.roi_x = 100
+                    self.roi_y = 100
+                    self.roi_width = 512
+                    self.roi_height = 512
+                    try:
+                        roi_window = metavision_hal.I_ROI.Window(self.roi_x, self.roi_y, self.roi_width, self.roi_height)
+                        i_roi.set_window(roi_window)
+                        i_roi.enable(True)
+                        print(f"[ROI] 已设置 ROI: x={self.roi_x}, y={self.roi_y}, width={self.roi_width}, height={self.roi_height}")
+                    except Exception as e:
+                        print(f"[ROI] 设置ROI失败，异常: {e}")
+                        self.device = None
+                else:
+                    print("[ROI] 设备不支持ROI，跳过设置")
+
+            if self.device is not None:
                 self.mv_iterator = EventsIterator.from_device(device=self.device, delta_t=self.nn_interval_us)
-            except:
-                self.device = None
+            else:
+                print("[Camera] 使用文件模式回放")
                 self.mv_iterator = EventsIterator(input_path=self.input_path, delta_t=self.nn_interval_us)
 
             self.height, self.width = self.mv_iterator.get_size()
@@ -370,7 +445,6 @@ class CameraThread(QThread):
         if hasattr(self, 'h5_file'):
             self.h5_file.close()
 
-    
     def _run_aedat4_loop(self):
     # 第一帧不受fps间隔限制，而是第一个事件包里面所有事件进行成像处理
         # ======== 1. UI 渲染变量 (约 33.3ms) ========
@@ -419,7 +493,8 @@ class CameraThread(QThread):
 
                 frame_buffer = dv.EventStore()
                 # 更新下一帧的目标时间
-                next_frame_time += frame_interval_us
+                next_frame_time = arr['timestamp'][-1] + frame_interval_us
+                # next_frame_time += frame_interval_us
 
             # ---------------------------------------------------------
             # 任务 B：神经网络精准切割 (严格按 20ms 步进)
@@ -457,6 +532,7 @@ class CameraThread(QThread):
                         # 电脑太卡严重滞后，重新对齐时间轴
                         start_real_time = time.perf_counter()
                         start_sensor_time = next_nn_time
+                        next_frame_time = start_sensor_time + frame_interval_us
 
                     # 更新网络预测的下一个 20ms 目标
                     next_nn_time += self.nn_interval_us
@@ -469,12 +545,25 @@ class CameraThread(QThread):
             time.sleep(0.05)
 
     def _run_metavision_loop(self):
+        start_sensor_time = None
+        start_real_time = None
+
         for evs in self.mv_iterator:
             if not self.is_running:
                 break
 
             if len(evs) == 0:
                 continue
+
+            if start_sensor_time is None:
+                start_sensor_time = evs['t'][0]
+                start_real_time = time.perf_counter()
+            else:
+                sensor_elapsed = (evs['t'][-1] - start_sensor_time) / 1_000_000.0
+                real_elapsed = time.perf_counter() - start_real_time
+                min_delay = sensor_elapsed - real_elapsed
+                if min_delay > 0:
+                    time.sleep(min_delay)
 
             self.event_frame_gen.process_events(evs)
 
@@ -505,5 +594,5 @@ class CameraThread(QThread):
                 i_events_stream.stop_log_raw_data()
                 self.is_recording = False
 
-    image_signal = pyqtSignal(object, int)
+    image_signal = pyqtSignal(object, object)
     finished_signal = pyqtSignal()  

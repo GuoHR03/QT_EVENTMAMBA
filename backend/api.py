@@ -9,8 +9,8 @@ from backend.NetworkThread import NetworkThread
 
 
 class BackendAPI(QObject):
-    image_signal = pyqtSignal(object, int)
-    prediction_signal = pyqtSignal(str, int)
+    image_signal = pyqtSignal(object, object)
+    prediction_signal = pyqtSignal(str, object)
     playback_finished_signal = pyqtSignal()
 
     def __init__(self):
@@ -20,6 +20,7 @@ class BackendAPI(QObject):
         self.network_thread = None
         self.backend_process = None
         self.file_path = None
+        self.roi_params = None
 
     def is_camera_running(self):
         return self.camera_thread is not None and self.camera_thread.isRunning()
@@ -29,6 +30,11 @@ class BackendAPI(QObject):
 
     def set_input_file(self, file_path):
         self.file_path = file_path
+
+    def set_roi(self, roi_x, roi_y, roi_width, roi_height):
+        self.roi_params = (roi_x, roi_y, roi_width, roi_height)
+        if self.camera_thread is not None and self.camera_thread.isRunning():
+            self.camera_thread.set_roi(roi_x, roi_y, roi_width, roi_height)
 
     def start_camera(self, palette, fps):
         if self.camera_thread is not None:
@@ -41,6 +47,8 @@ class BackendAPI(QObject):
         }
         if self.file_path:
             kwargs["file_path"] = self.file_path
+        if self.roi_params:
+            kwargs["roi_params"] = self.roi_params
 
         self.camera_thread = CameraThread(**kwargs)
         self.camera_thread.image_signal.connect(self.image_signal.emit)
