@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>Form</class>
- <widget class="QWidget" name="Form">
+ <class>ChooseWindowForm</class>
+ <widget class="QWidget" name="ChooseWindowForm">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -11,9 +11,9 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>Form</string>
+   <string>选择窗口</string>
   </property>
-  <widget class="QPushButton" name="pushButton">
+  <widget class="QPushButton" name="select_roi_button">
    <property name="geometry">
     <rect>
      <x>200</x>
@@ -23,7 +23,7 @@
     </rect>
    </property>
    <property name="text">
-    <string>choose</string>
+    <string>选择</string>
    </property>
   </widget>
  </widget>

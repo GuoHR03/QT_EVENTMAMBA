@@ -30,3 +30,6 @@ build/
 install_wsl.bat
 uninstall_wsl.bat
 run_app.bat
+
+# 排除优化说明文档
+OPTIMIZATION_NOTES.md

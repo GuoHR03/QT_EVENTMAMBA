@@ -12,22 +12,33 @@ https://github.com/GuoHR03/QT_EVENTMAMBA
 - 事件相机实时采集（Metavision SDK）
 - 离线文件回放（AEDAT4、RAW、H5/HDF5 格式）
 - 录制功能（.raw 格式保存）
+- **RAW 文件按真实时间戳回放，避免倍速播放**
 
 ### 2. 事件数据处理
 - 下采样与归一化
 - 可配置的兴趣区域（ROI）裁剪
 - 时间轴缩放与归一化
 - 支持 640x480 和 1280x720 分辨率
+- **空事件与裁剪空结果保护**
 
 ### 3. 神经网络推理
 - EventMamba 模型集成（通过 WSL 部署）
 - 实时目标点预测
 - 支持自定义模型权重加载
+- **支持多种 checkpoint 格式，自动选择 cuda/cpu**
+- **模型加载失败保护**
 
 ### 4. 可视化界面
 - 事件流实时渲染（多种配色方案）
-- 预测结果圆形标记
+- 预测结果圆形标记（**按实际分辨率动态缩放**）
 - 文件选择与参数配置
+- **预测结果与图像帧时间同步**
+
+### 5. 通信与稳定性
+- Windows ↔ WSL ZMQ 通信
+- **ZMQ 超时与异常处理**
+- **socket 异常后自动重建连接**
+- **可通过环境变量配置 WSL 参数**
 
 ## 技术栈
 
@@ -84,6 +95,14 @@ wsl -d EventMamba_mini python linux_backend.py --weights /path/to/model.pth
 2. 运行主程序：
 ```bash
 python app/widget.py
+```
+
+### 可选环境变量
+
+```bash
+# WSL 配置
+EVENTMAMBA_WSL_DISTRO=EventMamba_mini
+EVENTMAMBA_LINUX_PYTHON=/opt/miniconda3/envs/eventmamba/bin/python
 ```
 
 ## 使用说明

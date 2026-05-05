@@ -38,19 +38,14 @@ class InferenceServer:
                     self.socket.send_string(result_text)
                     continue
 
-                if isinstance(data, dict) and "data" in data:
-                    inference_data = data["data"]
-                else:
-                    inference_data = data
-
-                result_text = self.model.process_data(inference_data)
+                result_text = self.model.process_data(data)
                 self.socket.send_string(result_text)
 
             except Exception as e:
                 print(f"推理循环出错: {e}")
                 try:
                     self.socket.send_string(f"Error: {str(e)}")
-                except:
+                except Exception:
                     pass
 
     def stop(self):

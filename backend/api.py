@@ -20,6 +20,11 @@ class BackendAPI(QObject):
         self.network_thread = None
         self.backend_process = None
         self.file_path = None
+        self.wsl_distro = os.environ.get("EVENTMAMBA_WSL_DISTRO", "EventMamba_mini")
+        self.linux_python = os.environ.get(
+            "EVENTMAMBA_LINUX_PYTHON",
+            "/opt/miniconda3/envs/eventmamba/bin/python",
+        )
 
     def is_camera_running(self):
         return self.camera_thread is not None and self.camera_thread.isRunning()
@@ -76,12 +81,13 @@ class BackendAPI(QObject):
         if self.backend_process is None or self.backend_process.poll() is not None:
             current_dir = os.path.dirname(os.path.abspath(__file__))
             project_dir = os.path.dirname(current_dir)
-            #linux_python = "/home/tianmu/anaconda3/envs/eventmamba/bin/python"
-            linux_python = "/opt/miniconda3/envs/eventmamba/bin/python"
-            wsl_distro = "EventMamba_mini"
             linux_script = "linux_backend.py"
-            cmd = ["wsl", "-d", wsl_distro,
-                   linux_python, linux_script, "--weights", wsl_weights_path, "--port", str(port)]
+            cmd = [
+                "wsl", "-d", self.wsl_distro,
+                self.linux_python, linux_script,
+                "--weights", wsl_weights_path,
+                "--port", str(port),
+            ]
             self.backend_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
@@ -90,7 +96,7 @@ class BackendAPI(QObject):
             )
         
         if self.network_thread is None or not self.network_thread.isRunning():
-            self.network_thread = NetworkThread(self.camera_queue, host=host, port=port)
+            self.network_thread = NetworkThread(self.camera_queue, host=host, port=port, request_timeout_ms=1000)
             self.network_thread.result_signal.connect(self.prediction_signal.emit)
             self.network_thread.start()
         self._enqueue_camera_config()
@@ -98,7 +104,7 @@ class BackendAPI(QObject):
     def stop_eventmamba(self):
         if self.network_thread:
             self.network_thread.stop()
-            if not self.network_thread.wait(1000):
+            if not self.network_thread.wait(2000):
                 self.network_thread.terminate()
                 self.network_thread.wait(500)
             self.network_thread.deleteLater()
@@ -117,9 +123,10 @@ class BackendAPI(QObject):
 
         try:
             subprocess.run(
-                ["wsl", "pkill", "-f", "linux_backend.py"],
+                ["wsl", "-d", self.wsl_distro, "pkill", "-f", "linux_backend.py"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                timeout=2,
             )
         except Exception:
             pass
@@ -154,6 +161,8 @@ class BackendAPI(QObject):
             if len(parts) >= 4:
                 distro = parts[2]
                 inner = "/".join(parts[3:])
+                if distro == self.wsl_distro:
+                    return f"/{inner}".replace("\\", "/")
                 return f"/mnt/wsl/{distro}/{inner}".replace("\\", "/")
         if len(path) >= 2 and path[1] == ":":
             drive = path[0].lower()

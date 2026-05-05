@@ -2,21 +2,24 @@
 
 import time
 import queue
-import cv2
 import numpy as np
 import dv_processing as dv
 import h5py
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
 from metavision_core.event_io.raw_reader import initiate_device
-from metavision_core.event_io import EventsIterator
+from metavision_core.event_io import EventsIterator, LiveReplayEventsIterator
 from metavision_sdk_core import PeriodicFrameGenerationAlgorithm, ColorPalette
 
 
-def downSampling_cropping_and_normalization(data_numpy, src_width=640, src_height=480, dst_width=512, dst_height=512):
+def downsample_crop_normalize_events(data_numpy, src_width=640, src_height=480, dst_width=512, dst_height=512):
     """进行下采样+裁剪+归一化,适用于ini30数据集
     裁剪区域: x: [96, 608], y: [-16, 496] (实际有效)
     输出尺寸: 512x512
     """
+    if data_numpy is None or len(data_numpy) == 0:
+        empty = np.array([], dtype=np.float32)
+        return empty, empty, empty
+
     x_raw = data_numpy[:, 0] * (640.0 / src_width)
     y_raw = data_numpy[:, 1] * (480.0 / src_height)
     x_raw = np.clip(x_raw, 0, 640 - 1)
@@ -24,6 +27,10 @@ def downSampling_cropping_and_normalization(data_numpy, src_width=640, src_heigh
 
     # 裁剪 512 * 512
     mask = (x_raw >= 96) & (x_raw <= 608)
+    if not np.any(mask):
+        empty = np.array([], dtype=np.float32)
+        return empty, empty, empty
+
     x_values = x_raw[mask] - 96
     y_values = y_raw[mask] + 16
     t_values = data_numpy[:, 2][mask]
@@ -41,10 +48,14 @@ def downSampling_cropping_and_normalization(data_numpy, src_width=640, src_heigh
     return x_values, y_values, t_values
 
 
-def downSampling_and_normalization(data_numpy, src_width=640, src_height=480, dst_width=640, dst_height=480):
+def downsample_normalize_events(data_numpy, src_width=640, src_height=480, dst_width=640, dst_height=480):
     """进行下采样+归一化，适用于seet数据集
     输出尺寸: dst_width x dst_height
     """
+    if data_numpy is None or len(data_numpy) == 0:
+        empty = np.array([], dtype=np.float32)
+        return empty, empty, empty
+
     x_values = data_numpy[:, 0] * (dst_width / src_width)
     y_values = data_numpy[:, 1] * (dst_height / src_height)
     t_values = data_numpy[:, 2]
@@ -58,6 +69,27 @@ def downSampling_and_normalization(data_numpy, src_width=640, src_height=480, ds
     t_values = (t_values - t_min) / (t_max - t_min + 1e-5)
     t_values = t_values * 0.1
     return x_values, y_values, t_values
+
+
+def _put_latest(target_queue, payload):
+    if target_queue is None:
+        return
+
+    try:
+        if target_queue.full():
+            existing = target_queue.get_nowait()
+            if isinstance(existing, dict) and existing.get("msg_type") == "CONFIG":
+                target_queue.put_nowait(existing)
+                return
+    except queue.Empty:
+        pass
+    except queue.Full:
+        return
+
+    try:
+        target_queue.put_nowait(payload)
+    except queue.Full:
+        pass
 
 
 class NNWorker(QThread):
@@ -110,8 +142,9 @@ class NNWorker(QThread):
                     try:
                         nn_events = np.concatenate(buffer)
                         nn_events = np.column_stack((nn_events['x'], nn_events['y'], nn_events['t']))
+                        timestamp = int(nn_events[-1, 2])
 
-                        x_norm, y_norm, t_norm = downSampling_cropping_and_normalization(
+                        x_norm, y_norm, t_norm = downsample_crop_normalize_events(
                              nn_events, src_width=self.width, src_height=self.height
                         )
 
@@ -128,14 +161,14 @@ class NNWorker(QThread):
 
                         clean_array = np.column_stack((t_norm, x_norm, y_norm)).astype(np.float32)
 
-                        if self.target_queue.full():
-                            self.target_queue.get_nowait()
-                        self.target_queue.put_nowait({
+                        _put_latest(self.target_queue, {
                             "msg_type": "EVENTS",
                             "data": clean_array,
+                            "timestamp": timestamp,
+                            "cropped": True,
                         })
-                    except queue.Full:
-                        pass
+                    except Exception as exc:
+                        print(f"NNWorker error: {exc}")
 
                 buffer = []
                 next_nn_time += self.nn_interval_us
@@ -157,6 +190,7 @@ class CameraThread(QThread):
         self.palette_type = palette_type
         self.fps = fps if fps > 0 else 30
         self.nn_interval_us = int(nn_interval_ms * 1000)
+        self.replay_factor = 1.0
         self.width = 640
         self.height = 480
 
@@ -181,7 +215,7 @@ class CameraThread(QThread):
             try:
                 res = self.dv_reader.getEventResolution()
                 self.width, self.height = res.width, res.height
-            except:
+            except Exception:
                 self.width, self.height = 640, 480
 
             self.dv_visualizer = dv.visualization.EventVisualizer((self.width, self.height))
@@ -233,12 +267,17 @@ class CameraThread(QThread):
 
         else:
             # metavision 调色盘初始化
-            try:
-                self.device = initiate_device("")
-                self.mv_iterator = EventsIterator.from_device(device=self.device, delta_t=self.nn_interval_us)
-            except:
+            if self.input_path:
                 self.device = None
-                self.mv_iterator = EventsIterator(input_path=self.input_path, delta_t=self.nn_interval_us)
+                base_iterator = EventsIterator(input_path=self.input_path, delta_t=self.nn_interval_us)
+                self.mv_iterator = LiveReplayEventsIterator(base_iterator, replay_factor=self.replay_factor)
+            else:
+                try:
+                    self.device = initiate_device("")
+                    self.mv_iterator = EventsIterator.from_device(device=self.device, delta_t=self.nn_interval_us)
+                except Exception:
+                    self.device = None
+                    self.mv_iterator = EventsIterator(input_path=self.input_path, delta_t=self.nn_interval_us)
 
             self.height, self.width = self.mv_iterator.get_size()
 
@@ -335,7 +374,7 @@ class CameraThread(QThread):
                             frame_events['x'], frame_events['y'], frame_events['t']
                         ))
 
-                        x_norm, y_norm, t_norm = downSampling_and_normalization(
+                        x_norm, y_norm, t_norm = downsample_normalize_events(
                             nn_events, src_width=self.width, src_height=self.height
                         )
 
@@ -347,14 +386,14 @@ class CameraThread(QThread):
                             t_norm = t_norm[indices]
 
                             clean_array = np.column_stack((t_norm, x_norm, y_norm)).astype(np.float32)
-                            if self.target_queue.full():
-                                self.target_queue.get_nowait()
-                            self.target_queue.put_nowait({
+                            _put_latest(self.target_queue, {
                                 "msg_type": "EVENTS",
                                 "data": clean_array,
+                                "timestamp": int(frame_events['t'][-1]),
+                                "cropped": False,
                             })
-                    except queue.Full:
-                        pass
+                    except Exception as exc:
+                        print(f"H5 inference enqueue error: {exc}")
 
             next_frame_target_time += frame_interval_us
             sensor_elapsed_s = (next_frame_target_time - start_sensor_time) / 1_000_000.0
@@ -412,10 +451,9 @@ class CameraThread(QThread):
             # ---------------------------------------------------------
             if arr['timestamp'][-1] >= next_frame_time:
                 image_bgr = self.dv_visualizer.generateImage(frame_buffer)
-                image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
                 if self.is_running:
-                    self.image_signal.emit(image_rgb.copy(), int(arr['timestamp'][-1]))
+                    self.image_signal.emit(image_bgr.copy(), int(arr['timestamp'][-1]))
 
                 frame_buffer = dv.EventStore()
                 # 更新下一帧的目标时间
@@ -484,7 +522,7 @@ class CameraThread(QThread):
                 try:
                     self.nn_queue.get_nowait()
                     self.nn_queue.put_nowait(evs)
-                except:
+                except (queue.Empty, queue.Full):
                     pass
 
     def stop(self):
@@ -506,4 +544,4 @@ class CameraThread(QThread):
                 self.is_recording = False
 
     image_signal = pyqtSignal(object, int)
-    finished_signal = pyqtSignal()  
+    finished_signal = pyqtSignal()
