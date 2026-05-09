@@ -11,15 +11,22 @@ import torch
 from backend.realtime_inference import EventMambaPredictor
 
 class InferenceServer:
-    def __init__(self, weight_path, port=5555):
+    def __init__(self, center_weights, ellipse_weights=None, port=5555):
         self.port = port
-        self.weight_path = weight_path
+        self.center_weights = center_weights
+        self.ellipse_weights = ellipse_weights
         self.running = True
+        self.current_mode = "center"
+
+        if not center_weights or not os.path.exists(center_weights):
+            print(f"Center 权重文件不存在: {center_weights}")
+            sys.exit(1)
 
         try:
-            self.model = EventMambaPredictor(weight_path)
+            self.model = EventMambaPredictor(center_weights, ellipse_weights, num_classes=2)
+            self.current_mode = "center"
         except Exception as e:
-            print(f"模型加载失败: {e}")
+            print(f"Center 模型加载失败: {e}")
             sys.exit(1)
 
         self.context = zmq.Context()
@@ -57,11 +64,27 @@ class InferenceServer:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="EventMamba Linux Backend Server")
-    parser.add_argument("--weights", type=str, required=True, help="模型 .pt(.pth) 权重文件的路径")
+    parser.add_argument("--weights", type=str, help="Center 模式 .pt(.pth) 权重文件的路径（兼容旧接口）")
+    parser.add_argument("--center-weights", type=str, help="Center 模式 .pt(.pth) 权重文件的路径")
+    parser.add_argument("--ellipse-weights", type=str, help="Ellipse 模式 .pt(.pth) 权重文件的路径")
     parser.add_argument("--port", type=int, default=5555, help="ZMQ 绑定的端口号")
     args = parser.parse_args()
-    server = InferenceServer(weight_path=args.weights, port=args.port)
-    
+
+    center_weights = args.center_weights or args.weights
+    if not center_weights:
+        print("错误：必须提供 --weights 或 --center-weights 参数")
+        sys.exit(1)
+
+    ellipse_weights = args.ellipse_weights
+    if not ellipse_weights:
+        print("警告：未提供 --ellipse-weights，将无法切换到椭圆模式")
+
+    server = InferenceServer(
+        center_weights=center_weights,
+        ellipse_weights=ellipse_weights,
+        port=args.port
+    )
+
     try:
         server.run()
     except KeyboardInterrupt:

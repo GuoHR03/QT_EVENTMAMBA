@@ -5,6 +5,7 @@ import ast
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
+from PyQt6.QtCore import QPointF
 from PyQt6.QtWidgets import QFileDialog
 from PyQt6 import uic
 from choose_windows import ChooseWindow
@@ -68,11 +69,18 @@ class MainWindow(QWidget):
         self.last_prediction_mode = None
         self.prediction_buffer = {}
         self.nn_interval_ms = 20
+        self.current_roi = None
+        self.current_cam_size = None
+        self.prediction_mode = "center"
 
     def toggle_camera(self):
         """切换相机或离线文件播放状态。"""
         if not self.backend.is_camera_running():
-            self.backend.start_camera(self.palette_combo_box.currentText(), self.fps_spin_box.value())
+            self.backend.start_camera(
+                self.palette_combo_box.currentText(),
+                self.fps_spin_box.value(),
+                self.current_roi
+            )
             self.start_camera_button.setText("停止相机")
             self.record_button.setEnabled(True)
         else:
@@ -135,7 +143,19 @@ class MainWindow(QWidget):
                 pen.setWidth(3)
                 painter.setPen(pen)
                 painter.setBrush(QColor(255, 0, 0, 80))
-                painter.drawEllipse(px - 8, py - 8, 16, 16)
+                if self.prediction_mode == "ellipse" and len(matched_pred) >= 5:
+                    cx, cy, major, minor, angle = matched_pred
+                    scale_x = width / 512.0
+                    scale_y = height / 512.0
+                    scaled_major = major * scale_x * 20
+                    scaled_minor = minor * scale_y * 20
+                    painter.save()
+                    painter.translate(px, py)
+                    painter.rotate(angle)
+                    painter.drawEllipse(QPointF(0, 0), scaled_major, scaled_minor)
+                    painter.restore()
+                else:
+                    painter.drawEllipse(px - 8, py - 8, 16, 16)
                 painter.end()
 
         pixmap = QPixmap.fromImage(q_img)
@@ -170,7 +190,13 @@ class MainWindow(QWidget):
         x, y = values[0], values[1]
         if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
             return
-        pred_data = (float(x), float(y))
+
+        if len(values) >= 5 and self.prediction_mode == "ellipse":
+            major, minor, angle = values[2], values[3], values[4]
+            pred_data = (float(x), float(y), float(major), float(minor), float(angle))
+        else:
+            pred_data = (float(x), float(y))
+
         if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
             pred_mode = "norm"
         else:
@@ -269,7 +295,15 @@ class MainWindow(QWidget):
     def _map_cropped_prediction_to_pixel(self, pred, width, height):
         if pred is None:
             return None, None
-        x, y = pred
+        x, y = pred[0], pred[1]
+        if self.current_roi:
+            roi_x, roi_y, roi_width, roi_height = self.current_roi
+            px = int(roi_x + x * roi_width)
+            py = int(roi_y + y * roi_height)
+            if px < 0 or py < 0 or px >= width or py >= height:
+                return None, None
+            return px, py
+
         canonical_x = x * 512 + 96
         canonical_y = y * 512 - 16
         px = int(canonical_x * width / 640)
@@ -281,7 +315,7 @@ class MainWindow(QWidget):
     def _map_normalized_prediction_to_pixel(self, pred, width, height):
         if pred is None:
             return None, None
-        x, y = pred
+        x, y = pred[0], pred[1]
         px = int(x * width)
         py = int(y * height)
         if px < 0 or py < 0 or px >= width or py >= height:
@@ -291,7 +325,7 @@ class MainWindow(QWidget):
     def _map_raw_prediction_to_pixel(self, pred, width, height):
         if pred is None:
             return None, None
-        x, y = pred
+        x, y = pred[0], pred[1]
         px = int(x)
         py = int(y)
         if px < 0 or py < 0 or px >= width or py >= height:
@@ -300,7 +334,15 @@ class MainWindow(QWidget):
 
     def show_roi_window(self):
         self.roi_window = ChooseWindow()
+        self.roi_window.roi_confirmed.connect(self.on_roi_confirmed)
         self.roi_window.show()
+
+    def on_roi_confirmed(self, x, y, width, height, mode):
+        self.current_roi = (x, y, width, height)
+        self.prediction_mode = mode
+        self.backend.set_prediction_mode(mode)
+        self.log_text_edit.append(f"ROI 已设置: x={x}, y={y}, width={width}, height={height}, mode={mode}")
+        self.backend.update_camera_roi(self.current_roi)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

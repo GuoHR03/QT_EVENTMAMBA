@@ -20,6 +20,7 @@ class BackendAPI(QObject):
         self.network_thread = None
         self.backend_process = None
         self.file_path = None
+        self.prediction_mode = "center"
         self.wsl_distro = os.environ.get("EVENTMAMBA_WSL_DISTRO", "EventMamba_mini")
         self.linux_python = os.environ.get(
             "EVENTMAMBA_LINUX_PYTHON",
@@ -35,7 +36,9 @@ class BackendAPI(QObject):
     def set_input_file(self, file_path):
         self.file_path = file_path
 
-    def start_camera(self, palette, fps):
+    def start_camera(self, palette, fps, roi=None):
+        self._last_palette = palette
+        self._last_fps = fps
         if self.camera_thread is not None:
             self.stop_camera()
 
@@ -46,11 +49,14 @@ class BackendAPI(QObject):
         }
         if self.file_path:
             kwargs["file_path"] = self.file_path
+        if roi:
+            kwargs["roi"] = roi
 
         self.camera_thread = CameraThread(**kwargs)
         self.camera_thread.image_signal.connect(self.image_signal.emit)
         self.camera_thread.finished_signal.connect(self.playback_finished_signal.emit)
         self.camera_thread.start()
+        self._enqueue_camera_config()
 
     def stop_camera(self):
         if not self.camera_thread:
@@ -63,6 +69,36 @@ class BackendAPI(QObject):
 
         self.camera_thread.deleteLater()
         self.camera_thread = None
+
+    def update_camera_roi(self, roi):
+        """动态更新相机 ROI 参数（如果相机正在运行会重启）"""
+        if self.camera_thread and self.camera_thread.isRunning():
+            self.stop_camera()
+            self.start_camera_with_roi(roi)
+        else:
+            print("[BackendAPI] 相机未运行，ROI 将在下次启动时生效")
+
+    def set_prediction_mode(self, mode):
+        """设置预测模式 (center 或 ellipse)"""
+        self.prediction_mode = mode
+        print(f"[BackendAPI] 预测模式已设置为: {mode}")
+
+    def start_camera_with_roi(self, roi):
+        """内部方法：使用指定 ROI 启动相机"""
+        kwargs = {
+            "palette_type": self._last_palette if hasattr(self, '_last_palette') else "Dark",
+            "fps": self._last_fps if hasattr(self, '_last_fps') else 30,
+            "target_queue": self.camera_queue,
+            "roi": roi,
+        }
+        if self.file_path:
+            kwargs["file_path"] = self.file_path
+
+        self.camera_thread = CameraThread(**kwargs)
+        self.camera_thread.image_signal.connect(self.image_signal.emit)
+        self.camera_thread.finished_signal.connect(self.playback_finished_signal.emit)
+        self.camera_thread.start()
+        self._enqueue_camera_config()
 
     def start_recording(self):
         if self.camera_thread and self.camera_thread.isRunning():
@@ -142,6 +178,7 @@ class BackendAPI(QObject):
             "msg_type": "CONFIG",
             "width": self.camera_thread.width,
             "height": self.camera_thread.height,
+            "prediction_mode": self.prediction_mode,
         }
         while not self.camera_queue.empty():
             try:

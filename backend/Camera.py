@@ -5,10 +5,67 @@ import queue
 import numpy as np
 import dv_processing as dv
 import h5py
+import cv2
+from libs import metavision_hal
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
 from metavision_core.event_io.raw_reader import initiate_device
 from metavision_core.event_io import EventsIterator, LiveReplayEventsIterator
 from metavision_sdk_core import PeriodicFrameGenerationAlgorithm, ColorPalette
+
+
+def _normalize_roi(roi, src_width, src_height):
+    if not roi:
+        return None
+
+    x, y, width, height = [int(v) for v in roi]
+    if width <= 0 or height <= 0:
+        return None
+
+    x1 = max(0, min(src_width - 1, x))
+    y1 = max(0, min(src_height - 1, y))
+    x2 = max(x1 + 1, min(src_width, x + width))
+    y2 = max(y1 + 1, min(src_height, y + height))
+    return x1, y1, x2 - x1, y2 - y1
+
+
+def filter_events_by_roi(events, roi):
+    if events is None or len(events) == 0 or not roi:
+        return events
+
+    x, y, width, height = roi
+    mask = (
+        (events['x'] >= x) & (events['x'] < x + width) &
+        (events['y'] >= y) & (events['y'] < y + height)
+    )
+    return events[mask]
+
+
+def downsample_roi_normalize_events(data_numpy, roi, src_width=640, src_height=480):
+    if data_numpy is None or len(data_numpy) == 0 or not roi:
+        empty = np.array([], dtype=np.float32)
+        return empty, empty, empty
+
+    roi_x, roi_y, roi_width, roi_height = roi
+    mask = (
+        (data_numpy[:, 0] >= roi_x) & (data_numpy[:, 0] < roi_x + roi_width) &
+        (data_numpy[:, 1] >= roi_y) & (data_numpy[:, 1] < roi_y + roi_height)
+    )
+    if not np.any(mask):
+        empty = np.array([], dtype=np.float32)
+        return empty, empty, empty
+
+    cropped = data_numpy[mask]
+    x_values = (cropped[:, 0] - roi_x) / roi_width
+    y_values = (cropped[:, 1] - roi_y) / roi_height
+    t_values = cropped[:, 2]
+    x_values = np.clip(x_values, 0.0, 1.0)
+    y_values = np.clip(y_values, 0.0, 1.0)
+
+    t_max = t_values.max()
+    t_min = t_values.min()
+    t_values = (t_values - t_min) / (t_max - t_min + 1e-5)
+    t_values = t_values * 0.1
+    return x_values, y_values, t_values
 
 
 def downsample_crop_normalize_events(data_numpy, src_width=640, src_height=480, dst_width=512, dst_height=512):
@@ -96,7 +153,7 @@ class NNWorker(QThread):
     """神经网络推理线程 - 独立按 nn_interval 发送推理"""
     finished_signal = pyqtSignal()
 
-    def __init__(self, nn_queue, nn_interval_us, width, height, target_queue, analysis_enabled):
+    def __init__(self, nn_queue, nn_interval_us, width, height, target_queue, analysis_enabled, roi=None):
         super().__init__()
         self.nn_queue = nn_queue
         self.nn_interval_us = nn_interval_us
@@ -104,6 +161,7 @@ class NNWorker(QThread):
         self.height = height
         self.target_queue = target_queue
         self.analysis_enabled = analysis_enabled
+        self.roi = roi
         self.is_running = True
 
     def run(self):
@@ -144,9 +202,14 @@ class NNWorker(QThread):
                         nn_events = np.column_stack((nn_events['x'], nn_events['y'], nn_events['t']))
                         timestamp = int(nn_events[-1, 2])
 
-                        x_norm, y_norm, t_norm = downsample_crop_normalize_events(
-                             nn_events, src_width=self.width, src_height=self.height
-                        )
+                        if self.roi:
+                            x_norm, y_norm, t_norm = downsample_roi_normalize_events(
+                                nn_events, self.roi, src_width=self.width, src_height=self.height
+                            )
+                        else:
+                            x_norm, y_norm, t_norm = downsample_crop_normalize_events(
+                                 nn_events, src_width=self.width, src_height=self.height
+                            )
 
                         target_points = 1024
                         if len(x_norm) < target_points:
@@ -180,7 +243,7 @@ class CameraThread(QThread):
     """事件读取线程 - 读取事件并分发放到两个队列"""
     finished_signal = pyqtSignal()
 
-    def __init__(self, palette_type="Dark", fps=30, nn_interval_ms=20, target_queue=None, file_path=""):
+    def __init__(self, palette_type="Dark", fps=30, nn_interval_ms=20, target_queue=None, file_path="", roi=None):
         super().__init__()
         self.is_running = True
         self.is_recording = False
@@ -201,6 +264,13 @@ class CameraThread(QThread):
 
         self.nn_worker = None
 
+        self.requested_roi = roi
+        self.roi = None
+        self.roi_x = None
+        self.roi_y = None
+        self.roi_width = None
+        self.roi_height = None
+
         self._init_engine(palette_type)
 
     def _on_cd_frame_cb(self, ts, frame):
@@ -217,6 +287,7 @@ class CameraThread(QThread):
                 self.width, self.height = res.width, res.height
             except Exception:
                 self.width, self.height = 640, 480
+            self._set_roi(self.requested_roi)
 
             self.dv_visualizer = dv.visualization.EventVisualizer((self.width, self.height))
 
@@ -255,6 +326,7 @@ class CameraThread(QThread):
 
             self.width = self.h5_file.attrs.get('width', 640)
             self.height = self.h5_file.attrs.get('height', 480)
+            self._set_roi(self.requested_roi)
 
             palette_map = {
                 "Dark": ColorPalette.Dark, "Light": ColorPalette.Light,
@@ -266,20 +338,46 @@ class CameraThread(QThread):
             self.event_frame_gen.set_output_callback(self._on_cd_frame_cb)
 
         else:
-            # metavision 调色盘初始化
+            self.device = None
+            self._set_roi(self.requested_roi)
+
             if self.input_path:
                 self.device = None
+                print("[Camera] 使用文件模式回放")
                 base_iterator = EventsIterator(input_path=self.input_path, delta_t=self.nn_interval_us)
                 self.mv_iterator = LiveReplayEventsIterator(base_iterator, replay_factor=self.replay_factor)
             else:
                 try:
                     self.device = initiate_device("")
+                except Exception as e:
+                    print(f"[Camera] 连接相机失败: {e}")
+
+                if self.device is not None:
+                    i_roi = self.device.get_i_roi()
+                    if i_roi is not None and self.roi_x is not None:
+                        print("[ROI] 设备支持ROI，正在设置...")
+                        try:
+                            roi_window = metavision_hal.I_ROI.Window(
+                                self.roi_x, self.roi_y,
+                                self.roi_x + self.roi_width, self.roi_y + self.roi_height
+                            )
+                            i_roi.set_window(roi_window)
+                            i_roi.enable(True)
+                            print(f"[ROI] 已设置 ROI: x={self.roi_x}, y={self.roi_y}, width={self.roi_width}, height={self.roi_height}")
+                        except Exception as e:
+                            print(f"[ROI] 设置ROI失败，异常: {e}")
+                    else:
+                        if self.roi_x is None:
+                            print("[ROI] 未设置ROI参数，跳过硬件ROI设置")
+                        else:
+                            print("[ROI] 设备不支持ROI，跳过设置")
                     self.mv_iterator = EventsIterator.from_device(device=self.device, delta_t=self.nn_interval_us)
-                except Exception:
-                    self.device = None
-                    self.mv_iterator = EventsIterator(input_path=self.input_path, delta_t=self.nn_interval_us)
+                else:
+                    print("[Camera] 无法连接相机，也无输入文件")
+                    return
 
             self.height, self.width = self.mv_iterator.get_size()
+            self._set_roi(self.requested_roi)
 
             palette_map = {
                 "Dark": ColorPalette.Dark, "Light": ColorPalette.Light,
@@ -293,12 +391,28 @@ class CameraThread(QThread):
     def _start_workers(self, palette_type):
         self.nn_worker = NNWorker(
             self.nn_queue, self.nn_interval_us, self.width, self.height,
-            self.target_queue, lambda: self.analysis_enabled
+            self.target_queue, lambda: self.analysis_enabled, self._roi_tuple()
         )
         self.nn_worker.start()
 
     def _on_worker_finished(self):
         self.is_running = False
+
+    def _set_roi(self, roi):
+        normalized = _normalize_roi(roi, self.width, self.height)
+        self.roi = normalized
+        if normalized:
+            self.roi_x, self.roi_y, self.roi_width, self.roi_height = normalized
+        else:
+            self.roi_x = None
+            self.roi_y = None
+            self.roi_width = None
+            self.roi_height = None
+
+    def _roi_tuple(self):
+        if self.roi_x is None:
+            return None
+        return self.roi_x, self.roi_y, self.roi_width, self.roi_height
 
     def run(self):
         self._start_workers(self.palette_type)
@@ -366,6 +480,11 @@ class CameraThread(QThread):
             frame_events = np.concatenate(events_for_this_frame)
 
             if len(frame_events) > 0:
+                frame_events = filter_events_by_roi(frame_events, self._roi_tuple())
+                if len(frame_events) == 0:
+                    next_frame_target_time += frame_interval_us
+                    continue
+
                 self.event_frame_gen.process_events(frame_events)
 
                 if self.analysis_enabled and self.target_queue is not None:
@@ -374,9 +493,16 @@ class CameraThread(QThread):
                             frame_events['x'], frame_events['y'], frame_events['t']
                         ))
 
-                        x_norm, y_norm, t_norm = downsample_normalize_events(
-                            nn_events, src_width=self.width, src_height=self.height
-                        )
+                        if self._roi_tuple():
+                            x_norm, y_norm, t_norm = downsample_roi_normalize_events(
+                                nn_events, self._roi_tuple(), src_width=self.width, src_height=self.height
+                            )
+                            is_cropped = True
+                        else:
+                            x_norm, y_norm, t_norm = downsample_normalize_events(
+                                nn_events, src_width=self.width, src_height=self.height
+                            )
+                            is_cropped = False
 
                         target_points = 1024
                         if len(x_norm) >= target_points:
@@ -390,7 +516,7 @@ class CameraThread(QThread):
                                 "msg_type": "EVENTS",
                                 "data": clean_array,
                                 "timestamp": int(frame_events['t'][-1]),
-                                "cropped": False,
+                                "cropped": is_cropped,
                             })
                     except Exception as exc:
                         print(f"H5 inference enqueue error: {exc}")
@@ -444,16 +570,19 @@ class CameraThread(QThread):
                 next_nn_time = start_sensor_time + self.nn_interval_us
                 start_real_time = time.perf_counter()
 
-            nn_buffer.append(arr)
+            arr_for_nn = filter_events_by_roi(arr, self._roi_tuple())
+            if len(arr_for_nn) > 0:
+                nn_buffer.append(arr_for_nn)
 
             # ---------------------------------------------------------
             # 任务 A：UI 画面渲染 (攒够帧率对应的时间出图)
             # ---------------------------------------------------------
             if arr['timestamp'][-1] >= next_frame_time:
                 image_bgr = self.dv_visualizer.generateImage(frame_buffer)
+                image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
                 if self.is_running:
-                    self.image_signal.emit(image_bgr.copy(), int(arr['timestamp'][-1]))
+                    self.image_signal.emit(image_rgb.copy(), int(arr['timestamp'][-1]))
 
                 frame_buffer = dv.EventStore()
                 # 更新下一帧的目标时间
@@ -464,6 +593,10 @@ class CameraThread(QThread):
             # ---------------------------------------------------------
             if arr['timestamp'][-1] >= next_nn_time:
                 # 把零碎的数据拼成大段
+                if not nn_buffer:
+                    next_nn_time += self.nn_interval_us
+                    continue
+
                 buffer_events = np.concatenate(nn_buffer)
 
                 # 只要剩余数据的最新时间戳 >= 20ms 的目标时间，就一直切！
@@ -514,6 +647,10 @@ class CameraThread(QThread):
             if len(evs) == 0:
                 continue
 
+            evs = filter_events_by_roi(evs, self._roi_tuple())
+            if len(evs) == 0:
+                continue
+
             self.event_frame_gen.process_events(evs)
 
             try:
@@ -527,6 +664,15 @@ class CameraThread(QThread):
 
     def stop(self):
         self.is_running = False
+
+    def update_roi(self, roi):
+        """动态更新 ROI 参数（需要重启相机才能生效）"""
+        self.requested_roi = roi
+        self._set_roi(roi)
+        if self._roi_tuple():
+            print(f"[Camera] ROI 已更新: x={self.roi_x}, y={self.roi_y}, w={self.roi_width}, h={self.roi_height}")
+        else:
+            print("[Camera] ROI 已清除")
 
     def start_recording(self):
         if self.device is not None:

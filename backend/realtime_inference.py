@@ -17,16 +17,25 @@ def inplace_relu(m):
 
 
 class EventMambaPredictor:
-    def __init__(self, weights_path):
+    def __init__(self, center_weights, ellipse_weights=None, num_classes=2):
         self.width = 640
         self.height = 480
+        self.num_classes = num_classes
+        self.center_weights = center_weights
+        self.ellipse_weights = ellipse_weights
+        self.current_weights = center_weights
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = EventMamba(num_classes=2).to(self.device)
+        self.model = EventMamba(num_classes=num_classes).to(self.device)
         self.load_message = ""
 
-        if not weights_path or not os.path.exists(weights_path):
-            raise FileNotFoundError(f"权重文件不存在: {weights_path}")
+        if not center_weights or not os.path.exists(center_weights):
+            raise FileNotFoundError(f"Center 权重文件不存在: {center_weights}")
+        if ellipse_weights and not os.path.exists(ellipse_weights):
+            raise FileNotFoundError(f"Ellipse 权重文件不存在: {ellipse_weights}")
 
+        self._load_weights(center_weights, num_classes)
+
+    def _load_weights(self, weights_path, num_classes):
         try:
             state_dict = torch.load(weights_path, map_location=self.device)
             if isinstance(state_dict, dict):
@@ -44,14 +53,34 @@ class EventMambaPredictor:
         with torch.inference_mode():
             self.model(dummy_input)
 
+    def set_mode(self, mode):
+        """切换预测模式并重新加载对应模型"""
+        num_classes = 5 if mode == "ellipse" else 2
+        weights_path = self.ellipse_weights if mode == "ellipse" else self.center_weights
+
+        if mode == "ellipse" and not self.ellipse_weights:
+            print("[EventMamba] 警告：未设置椭圆模式权重文件，保持当前模式")
+            return
+
+        if weights_path == self.current_weights and num_classes == self.num_classes:
+            return
+
+        self.num_classes = num_classes
+        self.current_weights = weights_path
+        self.model = EventMamba(num_classes=num_classes).to(self.device)
+        self._load_weights(weights_path, num_classes)
+        print(f"[EventMamba] 模式切换为 {mode}，num_classes={num_classes}，权重: {weights_path}")
+
     def process_data(self, data):
         try:
             if isinstance(data, dict) and data.get("msg_type") == "CONFIG":
-                self.width = data["width"]
-                self.height = data["height"]
+                self.width = data.get("width", 640)
+                self.height = data.get("height", 480)
+                prediction_mode = data.get("prediction_mode", "center")
+                self.set_mode(prediction_mode)
                 if self.load_message:
-                    return f"{self.load_message}\n相机参数初始化成功\n相机参数: {self.width}x{self.height}"
-                return "相机参数初始化成功"
+                    return f"{self.load_message}\n相机参数初始化成功\n相机参数: {self.width}x{self.height}\n预测模式: {prediction_mode}"
+                return f"相机参数初始化成功\n预测模式: {prediction_mode}"
 
             is_cropped = True
             if isinstance(data, dict):

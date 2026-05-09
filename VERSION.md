@@ -103,6 +103,42 @@
 
 ---
 
+## v3
+
+**提交**: `HEAD`
+
+**发布日期**: 2026-05-07
+
+### 新增/优化功能
+
+#### 1. ROI 动态修改
+- 相机运行时可动态更新 ROI 参数，无需重启程序
+- ROI 设置后自动重启相机应用新参数
+- ROI 参数通过信号传递给后端
+
+#### 2. 预测模式切换（Center / Ellipse）
+- UI 新增 `center_radioButton` 和 `eli_radioButton` 单选按钮
+- 支持两种预测模式：Center（预测中心点）和 Ellipse（预测椭圆）
+- 信号链：`choose_windows.py` → `widget.py` → `backend/api.py` → `realtime_inference.py`
+- 模式信息通过 CONFIG 消息传递给 WSL 后端
+
+#### 3. 后端双模型权重支持
+- `linux_backend.py` 支持 `--center-weights` 和 `--ellipse-weights` 两个权重文件
+- 兼容旧接口 `--weights`（临时作为 center 权重）
+- `EventMambaPredictor.set_mode()` 支持动态切换模型
+- 切换模式时重新加载对应权重文件
+
+#### 4. 图像显示颜色修正
+- AEDAT 文件：`dv_visualizer.generateImage()` 返回 RGB，转换为 BGR
+- H5 文件：polarity 值从 `-1/1` 转换为 `0/1`
+
+#### 5. 绘制逻辑增强
+- Center 模式：绘制圆形标记
+- Ellipse 模式：绘制旋转椭圆标记
+- 椭圆支持 `semi_major`（长半轴）、`semi_minor`（短半轴）、`angle`（旋转角度）
+
+---
+
 ## 技术架构
 
 ```
@@ -123,7 +159,7 @@
 └──────────────────────────────────────────────┼─────────────┘
                                                │ TCP
 ┌──────────────────────────────────────────────┼─────────────┐
-│                      WSL2 端                  │             │
+│                      WSL2 端                 │             │
 ├──────────────────────────────────────────────┼─────────────┤
 │                        ┌─────────────────────┘             │
 │                        ▼                                    │
