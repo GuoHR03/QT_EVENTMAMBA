@@ -1,5 +1,43 @@
 # Version History
 
+## v5
+
+发布日期：2026-05-10
+
+### 变更内容
+
+- 接入椭圆预测相关脚本与模型依赖：
+  - 新增 `backend/models/eventmamba_v3.py`
+  - 新增 `backend/models/vsa.py`
+  - 新增 `train_ini30_vsa.py`
+- 椭圆推理链路打通：
+  - `EllipsePredictor` 可加载椭圆权重
+  - 自动读取权重同目录下的 `matrix_A.pt`
+  - 后端返回 `[x, y, a, b, angle]`
+- 修正 ROI/模式窗口交互：
+  - 默认选择 `center`
+  - 切换 `center / ellipse` 时即时同步模式
+  - 不再要求按确认按钮才切换预测模式
+- 增强模型加载交互：
+  - 加载权重时增加日志提示
+  - 加载/卸载时同步更新按钮状态
+- 修正 WSL 就绪握手逻辑：
+  - 保留 `PING / READY` 检查
+  - 修复 `REQ` socket 超时后在同一 socket 上重复重试的问题
+  - 改为每轮握手重建新的 `REQ` socket
+- 修正椭圆绘制逻辑：
+  - `angle` 按弧度转角度绘制
+  - `a / b` 按归一化尺寸映射到当前图像或 ROI
+  - 移除旧的经验缩放公式
+
+### 当前状态
+
+- `center` 模式可正常推理
+- `ellipse` 模式已接入真实推理与前端绘制
+- WSL 首次启动握手逻辑已修正，便于继续验证首次加载稳定性
+
+---
+
 ## v4
 
 发布日期：2026-05-10

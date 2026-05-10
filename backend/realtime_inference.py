@@ -3,7 +3,9 @@ import os
 import numpy as np
 import torch
 
-from backend.models.eventmamba_v1 import EventMamba
+from backend.models import vsa
+from backend.models.eventmamba_v1 import EventMamba as CenterEventMamba
+from backend.models.eventmamba_v3 import EventMamba as EllipseEventMamba
 
 
 def inplace_relu(module):
@@ -23,6 +25,13 @@ class BasePredictor:
         if not os.path.exists(weights_path):
             raise FileNotFoundError(f"权重文件不存在: {weights_path}")
 
+    def _extract_state_dict(self, checkpoint):
+        if isinstance(checkpoint, dict):
+            for key in ("state_dict", "model_state_dict", "model"):
+                if key in checkpoint and isinstance(checkpoint[key], dict):
+                    return checkpoint[key]
+        return checkpoint
+
     def predict(self, event_data):
         raise NotImplementedError
 
@@ -30,18 +39,13 @@ class BasePredictor:
 class CenterPredictor(BasePredictor):
     def __init__(self, weights_path, device):
         super().__init__(weights_path, device)
-        self.model = EventMamba(num_classes=2).to(self.device)
+        self.model = CenterEventMamba(num_classes=2).to(self.device)
         self._load_weights()
 
     def _load_weights(self):
         try:
             state_dict = torch.load(self.weights_path, map_location=self.device)
-            if isinstance(state_dict, dict):
-                for key in ("state_dict", "model_state_dict", "model"):
-                    if key in state_dict and isinstance(state_dict[key], dict):
-                        state_dict = state_dict[key]
-                        break
-            self.model.load_state_dict(state_dict)
+            self.model.load_state_dict(self._extract_state_dict(state_dict))
             self.load_message = f"成功加载中心点权重: {self.weights_path}"
         except Exception as e:
             raise RuntimeError(f"中心点权重加载失败，请检查路径或文件: {e}") from e
@@ -62,13 +66,43 @@ class CenterPredictor(BasePredictor):
 class EllipsePredictor(BasePredictor):
     def __init__(self, weights_path, device):
         super().__init__(weights_path, device)
-        self.load_message = (
-            f"已收到椭圆权重路径: {self.weights_path}；"
-            "椭圆网络框架接口已预留，但具体模型尚未接入"
-        )
+        self.matrix_path = os.path.join(os.path.dirname(self.weights_path), "matrix_A.pt")
+        if not os.path.exists(self.matrix_path):
+            raise FileNotFoundError(
+                f"椭圆模式缺少 matrix_A.pt，请将其放在权重同目录下: {self.matrix_path}"
+            )
+
+        self.model = EllipseEventMamba(num_classes=1024).to(self.device)
+        self.matrix_A = None
+        self._load_runtime_assets()
+
+    def _load_runtime_assets(self):
+        try:
+            state_dict = torch.load(self.weights_path, map_location=self.device)
+            self.model.load_state_dict(self._extract_state_dict(state_dict))
+            matrix_a = torch.load(self.matrix_path, map_location=self.device)
+            self.matrix_A = matrix_a.to(self.device).float()
+            self.load_message = (
+                f"成功加载椭圆权重: {self.weights_path}; "
+                f"成功加载 matrix_A: {self.matrix_path}"
+            )
+        except Exception as e:
+            raise RuntimeError(f"椭圆模型加载失败，请检查权重或 matrix_A: {e}") from e
+
+        self.model.eval()
+        self.model.apply(inplace_relu)
+        dummy_input = torch.randn(1, 3, 1024, device=self.device).float()
+        with torch.inference_mode():
+            self.model(dummy_input)
 
     def predict(self, event_data):
-        raise NotImplementedError("椭圆网络框架尚未实现，请在 EllipsePredictor 中接入实际模型")
+        data_tensor = torch.from_numpy(event_data).unsqueeze(0).permute(0, 2, 1).to(self.device).float()
+        with torch.inference_mode():
+            predict_vector = self.model(data_tensor)
+            real_part, imag_part = torch.chunk(predict_vector, chunks=2, dim=-1)
+            predict_vsa = torch.complex(real_part, imag_part)
+            decoded = vsa.Decode_VSA(predict_vsa, self.matrix_A, isELL=True)
+        return decoded.squeeze(0).cpu().numpy().tolist()
 
 
 class EventMambaPredictor:

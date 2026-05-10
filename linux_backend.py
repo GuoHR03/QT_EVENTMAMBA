@@ -46,6 +46,9 @@ class InferenceServer:
         while self.running:
             try:
                 data = self.socket.recv_pyobj()
+                if isinstance(data, dict) and data.get("msg_type") == "PING":
+                    self.socket.send_string("READY")
+                    continue
                 result_text = self.model.process_data(data)
                 self.socket.send_string(result_text)
             except Exception as e:

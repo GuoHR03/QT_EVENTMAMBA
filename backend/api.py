@@ -1,7 +1,9 @@
 import os
 import queue
 import subprocess
+import time
 
+import zmq
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from backend.Camera import CameraThread
@@ -115,6 +117,8 @@ class BackendAPI(QObject):
     def start_eventmamba(self, weights_path, port=5555, host="127.0.0.1"):
         if not weights_path:
             raise ValueError("weights_path is required")
+        if self.prediction_mode not in ("center", "ellipse"):
+            raise ValueError("prediction_mode is not set")
 
         self.weights_path = weights_path
         wsl_weights_path = self._to_wsl_path(weights_path)
@@ -141,6 +145,7 @@ class BackendAPI(QObject):
                 stderr=subprocess.DEVNULL,
                 cwd=project_dir,
             )
+            self._wait_for_backend_ready(host=host, port=port)
 
         if self.network_thread is None or not self.network_thread.isRunning():
             self.network_thread = NetworkThread(self.camera_queue, host=host, port=port, request_timeout_ms=1000)
@@ -188,8 +193,40 @@ class BackendAPI(QObject):
         self.stop_camera()
         self.stop_eventmamba()
 
+    def _wait_for_backend_ready(self, host, port, timeout_s=10.0, poll_interval_s=0.2):
+        endpoint = f"tcp://{host}:{port}"
+        deadline = time.time() + timeout_s
+        context = zmq.Context()
+        try:
+            while time.time() < deadline:
+                if self.backend_process is not None and self.backend_process.poll() is not None:
+                    raise RuntimeError("WSL 推理服务启动失败，进程已退出")
+
+                socket = context.socket(zmq.REQ)
+                socket.setsockopt(zmq.LINGER, 0)
+                socket.setsockopt(zmq.RCVTIMEO, int(poll_interval_s * 1000))
+                socket.setsockopt(zmq.SNDTIMEO, int(poll_interval_s * 1000))
+                try:
+                    socket.connect(endpoint)
+                    socket.send_pyobj({"msg_type": "PING"})
+                    reply = socket.recv_string()
+                    if reply == "READY":
+                        return
+                except zmq.Again:
+                    time.sleep(poll_interval_s)
+                except zmq.ZMQError:
+                    time.sleep(poll_interval_s)
+                finally:
+                    socket.close(linger=0)
+
+            raise TimeoutError("等待 WSL 推理服务就绪超时")
+        finally:
+            context.term()
+
     def _enqueue_camera_config(self):
         if not self.camera_thread or not self.camera_thread.isRunning():
+            return
+        if self.prediction_mode not in ("center", "ellipse"):
             return
         payload = {
             "msg_type": "CONFIG",

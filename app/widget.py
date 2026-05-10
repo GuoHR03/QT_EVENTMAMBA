@@ -2,6 +2,7 @@ import sys
 import os
 import traceback
 import ast
+import math
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
@@ -72,7 +73,6 @@ class MainWindow(QWidget):
         self.current_roi = None
         self.current_cam_size = None
         self.prediction_mode = "center"
-
     def toggle_camera(self):
         """切换相机或离线文件播放状态。"""
         if not self.backend.is_camera_running():
@@ -145,13 +145,19 @@ class MainWindow(QWidget):
                 painter.setBrush(QColor(255, 0, 0, 80))
                 if self.prediction_mode == "ellipse" and len(matched_pred) >= 5:
                     cx, cy, major, minor, angle = matched_pred
-                    scale_x = width / 512.0
-                    scale_y = height / 512.0
-                    scaled_major = major * scale_x * 20
-                    scaled_minor = minor * scale_y * 20
+                    if matched_cropped and self.current_roi:
+                        _, _, roi_width, roi_height = self.current_roi
+                        ellipse_width = roi_width
+                        ellipse_height = roi_height
+                    else:
+                        ellipse_width = width
+                        ellipse_height = height
+                    scaled_major = major * ellipse_width
+                    scaled_minor = minor * ellipse_height
+                    angle_deg = math.degrees(angle)
                     painter.save()
                     painter.translate(px, py)
-                    painter.rotate(angle)
+                    painter.rotate(angle_deg)
                     painter.drawEllipse(QPointF(0, 0), scaled_major, scaled_minor)
                     painter.restore()
                 else:
@@ -266,14 +272,29 @@ class MainWindow(QWidget):
             self.log_text_edit.append("请先选择权重文件")
             return
 
+        self.load_model_button.setEnabled(False)
+        self.unload_model_button.setEnabled(False)
+        self.select_weight_button.setEnabled(False)
+        self.load_model_button.setText("Loading...")
+        self.log_text_edit.append(
+            f"正在启动 WSL 推理服务并加载 {self.prediction_mode} 模式权重，首次加载可能需要几秒钟..."
+        )
+        QApplication.processEvents()
+
         try:
             self.backend.start_eventmamba(self.weight_path)
         except Exception as exc:
+            self.load_model_button.setEnabled(True)
+            self.select_weight_button.setEnabled(True)
+            self.load_model_button.setText("Load EventMamba")
             self.log_text_edit.append(f"加载 EventMamba 失败: {exc}")
             return
 
+        self.log_text_edit.append("WSL 推理服务已就绪，权重加载完成")
+        self.load_model_button.setText("Loaded")
         self.load_model_button.setEnabled(False)
         self.unload_model_button.setEnabled(True)
+        self.select_weight_button.setEnabled(True)
 
     def unload_eventmamba(self):
         """关闭Eventmamba模型 以及WSL"""
@@ -281,6 +302,9 @@ class MainWindow(QWidget):
         self.backend.stop_eventmamba()
         self.load_model_button.setEnabled(True)
         self.unload_model_button.setEnabled(False)
+        self.select_weight_button.setEnabled(True)
+        self.load_model_button.setText("Load EventMamba")
+        self.log_text_edit.append("WSL 推理服务已关闭，可以重新选择权重并加载")
         self.last_prediction = None
         self.last_prediction_mode = None
         self.prediction_buffer.clear()
@@ -334,8 +358,15 @@ class MainWindow(QWidget):
 
     def show_roi_window(self):
         self.roi_window = ChooseWindow()
+        self.roi_window.mode_confirmed.connect(self.on_mode_confirmed)
         self.roi_window.roi_confirmed.connect(self.on_roi_confirmed)
+        self.on_mode_confirmed(self.roi_window.selected_mode())
         self.roi_window.show()
+
+    def on_mode_confirmed(self, mode):
+        self.prediction_mode = mode
+        self.backend.set_prediction_mode(mode)
+        self.log_text_edit.append(f"Prediction mode set: {mode}")
 
     def on_roi_confirmed(self, x, y, width, height, mode):
         self.current_roi = (x, y, width, height)
