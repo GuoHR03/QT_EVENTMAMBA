@@ -1,13 +1,17 @@
-#VSA-EVENTMAMBA
+#direct
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data as data
-from modules import LocalGrouper
-from mamba_layer import MambaBlock
+import os
+print("\n" + "="*50)
+# 1. 查看你是在哪个目录下运行的这个脚本 (Current Working Directory)
+print(f" 1.  (getcwd): \n   {os.getcwd()}")
+from .modules import LocalGrouper
+from .mamba_layer import MambaBlock
 
-
+##### Define the attention mechanism #####
 class Attention(nn.Module):
     def __init__(self, hidden_size):
         super(Attention, self).__init__()
@@ -82,14 +86,17 @@ class EventMamba(nn.Module):
         self.attention_3 = Attention(self.feature_list[3])
         self.attention_4 = Attention(self.feature_list[3])
         self.classifier = nn.Sequential(
-            nn.Linear(self.feature_list[3], 512),
-            nn.BatchNorm1d(512),
+            nn.Linear(self.feature_list[3], 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Linear(512, 1024),
-            # nn.Sigmoid()
+            nn.Dropout(0.5),
+            nn.Linear(256, num_classes),
+            nn.Sigmoid()
         )
     
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor):          #[b,p,f] ->[b,f,p]  已经发生转换
+        #xyz的shape是[b,p,f] [ , , 3]
+        #x的shape是[b,f,p] [ , 3 , ]
         xyz = x.permute(0,2,1)
         batch_size, _, _ = x.size()
         xyz, x = self.group(xyz, x.permute(0, 2, 1))

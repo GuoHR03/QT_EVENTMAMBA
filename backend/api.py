@@ -20,6 +20,7 @@ class BackendAPI(QObject):
         self.network_thread = None
         self.backend_process = None
         self.file_path = None
+        self.weights_path = None
         self.prediction_mode = "center"
         self.wsl_distro = os.environ.get("EVENTMAMBA_WSL_DISTRO", "EventMamba_mini")
         self.linux_python = os.environ.get(
@@ -71,7 +72,7 @@ class BackendAPI(QObject):
         self.camera_thread = None
 
     def update_camera_roi(self, roi):
-        """动态更新相机 ROI 参数（如果相机正在运行会重启）"""
+        """动态更新相机 ROI 参数；如果相机运行中则重启应用。"""
         if self.camera_thread and self.camera_thread.isRunning():
             self.stop_camera()
             self.start_camera_with_roi(roi)
@@ -79,15 +80,18 @@ class BackendAPI(QObject):
             print("[BackendAPI] 相机未运行，ROI 将在下次启动时生效")
 
     def set_prediction_mode(self, mode):
-        """设置预测模式 (center 或 ellipse)"""
+        """设置预测模式 (center 或 ellipse)。"""
+        mode_changed = self.prediction_mode != mode
         self.prediction_mode = mode
         print(f"[BackendAPI] 预测模式已设置为: {mode}")
+        if mode_changed and self.is_inference_running() and self.weights_path:
+            self.restart_eventmamba()
 
     def start_camera_with_roi(self, roi):
-        """内部方法：使用指定 ROI 启动相机"""
+        """内部方法：使用指定 ROI 启动相机。"""
         kwargs = {
-            "palette_type": self._last_palette if hasattr(self, '_last_palette') else "Dark",
-            "fps": self._last_fps if hasattr(self, '_last_fps') else 30,
+            "palette_type": self._last_palette if hasattr(self, "_last_palette") else "Dark",
+            "fps": self._last_fps if hasattr(self, "_last_fps") else 30,
             "target_queue": self.camera_queue,
             "roi": roi,
         }
@@ -112,17 +116,24 @@ class BackendAPI(QObject):
         if not weights_path:
             raise ValueError("weights_path is required")
 
+        self.weights_path = weights_path
         wsl_weights_path = self._to_wsl_path(weights_path)
 
         if self.backend_process is None or self.backend_process.poll() is not None:
             current_dir = os.path.dirname(os.path.abspath(__file__))
             project_dir = os.path.dirname(current_dir)
             linux_script = "linux_backend.py"
+            weights_arg = "--ellipse-weights" if self.prediction_mode == "ellipse" else "--center-weights"
             cmd = [
-                "wsl", "-d", self.wsl_distro,
-                self.linux_python, linux_script,
-                "--weights", wsl_weights_path,
-                "--port", str(port),
+                "wsl",
+                "-d",
+                self.wsl_distro,
+                self.linux_python,
+                linux_script,
+                weights_arg,
+                wsl_weights_path,
+                "--port",
+                str(port),
             ]
             self.backend_process = subprocess.Popen(
                 cmd,
@@ -130,12 +141,18 @@ class BackendAPI(QObject):
                 stderr=subprocess.DEVNULL,
                 cwd=project_dir,
             )
-        
+
         if self.network_thread is None or not self.network_thread.isRunning():
             self.network_thread = NetworkThread(self.camera_queue, host=host, port=port, request_timeout_ms=1000)
             self.network_thread.result_signal.connect(self.prediction_signal.emit)
             self.network_thread.start()
         self._enqueue_camera_config()
+
+    def restart_eventmamba(self, port=5555, host="127.0.0.1"):
+        if not self.weights_path:
+            return
+        self.stop_eventmamba()
+        self.start_eventmamba(self.weights_path, port=port, host=host)
 
     def stop_eventmamba(self):
         if self.network_thread:
