@@ -6,6 +6,11 @@ import torch
 from backend.models import vsa
 from backend.models.eventmamba_v1 import EventMamba as CenterEventMamba
 from backend.models.eventmamba_v3 import EventMamba as EllipseEventMamba
+from backend.protocol import (
+    make_error_response,
+    make_prediction_response,
+    make_status_response,
+)
 
 
 def inplace_relu(module):
@@ -165,13 +170,23 @@ class EventMambaPredictor:
                 prediction_mode = data.get("prediction_mode", self.current_mode)
                 self.set_mode(prediction_mode)
                 if self.load_message:
-                    return (
-                        f"{self.load_message}\n"
-                        f"相机参数初始化成功\n"
-                        f"相机参数: {self.width}x{self.height}\n"
-                        f"预测模式: {prediction_mode}"
+                    return make_status_response(
+                        (
+                            f"{self.load_message}\n"
+                            f"相机参数初始化成功\n"
+                            f"相机参数: {self.width}x{self.height}\n"
+                            f"预测模式: {prediction_mode}"
+                        ),
+                        width=self.width,
+                        height=self.height,
+                        mode=prediction_mode,
                     )
-                return f"相机参数初始化成功\n预测模式: {prediction_mode}"
+                return make_status_response(
+                    f"相机参数初始化成功\n预测模式: {prediction_mode}",
+                    width=self.width,
+                    height=self.height,
+                    mode=prediction_mode,
+                )
 
             is_cropped = True
             if isinstance(data, dict):
@@ -180,9 +195,13 @@ class EventMambaPredictor:
 
             event_data = self._parse_event_data(data)
             result = self.predictor.predict(event_data)
-            return f"输出结果为：{result}|cropped:{is_cropped}"
+            return make_prediction_response(
+                result,
+                cropped=is_cropped,
+                mode=self.current_mode,
+            )
 
         except Exception as e:
             error_msg = f"模型推理出错: {str(e)}"
             print(error_msg)
-            return error_msg
+            return make_error_response(error_msg)

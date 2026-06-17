@@ -1,10 +1,12 @@
 #Windows端
+import pickle
+import pickle
 import queue
 import zmq
 from PyQt6.QtCore import QThread, pyqtSignal
 
 class NetworkThread(QThread):
-    result_signal = pyqtSignal(str, int)
+    result_signal = pyqtSignal(object, int)
 
     def __init__(self, input_queue, host="127.0.0.1", port=5555, request_timeout_ms=1000):
         super().__init__()
@@ -32,7 +34,7 @@ class NetworkThread(QThread):
 
                 try:
                     self.socket.send_pyobj(data)
-                    result = self.socket.recv_string()
+                    result = self._recv_result()
                     self._last_error = None
                     self.result_signal.emit(result, timestamp)
                 except zmq.Again:
@@ -41,6 +43,10 @@ class NetworkThread(QThread):
                 except zmq.ZMQError as exc:
                     if self.running:
                         self._emit_error_once(f"通信异常：{exc}", timestamp)
+                        self._reset_socket()
+                except Exception as exc:
+                    if self.running:
+                        self._emit_error_once(f"响应解析异常：{exc}", timestamp)
                         self._reset_socket()
         finally:
             self._close_socket()
@@ -72,6 +78,13 @@ class NetworkThread(QThread):
         except (AttributeError, zmq.ZMQError):
             pass
         self.socket.connect(self.endpoint)
+
+    def _recv_result(self):
+        raw = self.socket.recv()
+        try:
+            return pickle.loads(raw)
+        except Exception:
+            return raw.decode("utf-8", errors="replace")
 
     def _close_socket(self):
         if self.socket is not None:

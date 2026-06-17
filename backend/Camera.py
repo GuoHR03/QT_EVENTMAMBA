@@ -11,6 +11,100 @@ from PyQt6.QtCore import QThread, pyqtSignal, QObject
 from metavision_core.event_io.raw_reader import initiate_device
 from metavision_core.event_io import EventsIterator, LiveReplayEventsIterator
 from metavision_sdk_core import PeriodicFrameGenerationAlgorithm, ColorPalette
+try:
+    from metavision_sdk_base import EventCD
+except Exception:
+    EventCD = np.dtype([('x', '<u2'), ('y', '<u2'), ('p', 'i1'), ('t', '<i8')])
+
+try:
+    from metavision_sdk_cv import (
+        ActivityNoiseFilterAlgorithm,
+        AntiFlickerAlgorithm,
+        SpatioTemporalContrastAlgorithm,
+        TrailFilterAlgorithm,
+    )
+    _METAVISION_CV_IMPORT_ERROR = None
+except Exception as exc:
+    ActivityNoiseFilterAlgorithm = None
+    AntiFlickerAlgorithm = None
+    SpatioTemporalContrastAlgorithm = None
+    TrailFilterAlgorithm = None
+    _METAVISION_CV_IMPORT_ERROR = exc
+
+try:
+    from metavision_sdk_cv import FrequencyEstimationConfig
+except Exception:
+    FrequencyEstimationConfig = None
+
+
+try:
+    EVENT_CD_DTYPE = np.dtype(EventCD)
+except TypeError:
+    EVENT_CD_DTYPE = np.dtype([('x', '<u2'), ('y', '<u2'), ('p', 'i1'), ('t', '<i8')])
+NOISE_FILTER_ALIASES = {
+    "": "none",
+    "none": "none",
+    "off": "none",
+    "disabled": "none",
+    "activity": "activity",
+    "activity_noise": "activity",
+    "activitynoisefilter": "activity",
+    "trail": "trail",
+    "trail_filter": "trail",
+    "stc": "stc",
+    "spatio_temporal_contrast": "stc",
+    "spatiotemporalcontrast": "stc",
+    "anti_flicker": "anti_flicker",
+    "antiflicker": "anti_flicker",
+    "flicker": "anti_flicker",
+}
+NOISE_FILTER_DISPLAY_NAMES = {
+    "none": "None",
+    "activity": "Activity",
+    "trail": "Trail",
+    "stc": "STC",
+    "anti_flicker": "AntiFlicker",
+}
+
+
+def _normalize_noise_filter_type(filter_type):
+    key = str(filter_type or "none").strip().lower().replace("-", "_").replace(" ", "_")
+    return NOISE_FILTER_ALIASES.get(key, "none")
+
+
+def _event_field_name(events, candidates):
+    names = events.dtype.names or ()
+    for name in candidates:
+        if name in names:
+            return name
+    return None
+
+
+def _to_event_cd(events):
+    if events is None:
+        return None
+    if len(events) == 0:
+        return np.empty(0, dtype=EVENT_CD_DTYPE)
+
+    names = events.dtype.names or ()
+    time_field = _event_field_name(events, ("t", "timestamp", "ts"))
+    polarity_field = _event_field_name(events, ("p", "pol", "polarity"))
+    if "x" not in names or "y" not in names or time_field is None or polarity_field is None:
+        raise ValueError("events must have x, y, polarity and timestamp fields")
+
+    if events.dtype == EVENT_CD_DTYPE and time_field == "t" and polarity_field == "p":
+        return np.ascontiguousarray(events)
+
+    converted = np.empty(len(events), dtype=EVENT_CD_DTYPE)
+    converted["x"] = events["x"]
+    converted["y"] = events["y"]
+    converted["p"] = events[polarity_field]
+    converted["t"] = events[time_field]
+    return converted
+
+
+def _event_time_field(events):
+    return _event_field_name(events, ("t", "timestamp", "ts"))
 
 
 def _normalize_roi(roi, src_width, src_height):
@@ -243,7 +337,17 @@ class CameraThread(QThread):
     """事件读取线程 - 读取事件并分发放到两个队列"""
     finished_signal = pyqtSignal()
 
-    def __init__(self, palette_type="Dark", fps=30, nn_interval_ms=20, target_queue=None, file_path="", roi=None):
+    def __init__(
+        self,
+        palette_type="Dark",
+        fps=30,
+        nn_interval_ms=20,
+        target_queue=None,
+        file_path="",
+        roi=None,
+        noise_filter_type="none",
+        noise_filter_threshold_us=10000,
+    ):
         super().__init__()
         self.is_running = True
         self.is_recording = False
@@ -256,6 +360,11 @@ class CameraThread(QThread):
         self.replay_factor = 1.0
         self.width = 640
         self.height = 480
+        self.noise_filter_type = _normalize_noise_filter_type(noise_filter_type)
+        self.noise_filter_threshold_us = max(1, int(noise_filter_threshold_us or 10000))
+        self.noise_filter = None
+        self.noise_filter_output = None
+        self._noise_filter_warning_printed = False
 
         self.is_aedat4 = self.input_path and self.input_path.lower().endswith(".aedat4")
         self.is_h5 = self.input_path and self.input_path.lower().endswith(('.h5', '.hdf5'))
@@ -414,7 +523,102 @@ class CameraThread(QThread):
             return None
         return self.roi_x, self.roi_y, self.roi_width, self.roi_height
 
+    def _init_noise_filter(self):
+        if self.noise_filter_type == "none":
+            self._report_status("[NoiseFilter] Disabled")
+            return
+        if _METAVISION_CV_IMPORT_ERROR is not None:
+            self._report_status(f"[NoiseFilter] Metavision CV unavailable: {_METAVISION_CV_IMPORT_ERROR}")
+            self.noise_filter_type = "none"
+            return
+
+        try:
+            if self.noise_filter_type == "activity":
+                self.noise_filter = ActivityNoiseFilterAlgorithm(
+                    self.width, self.height, self.noise_filter_threshold_us
+                )
+            elif self.noise_filter_type == "trail":
+                self.noise_filter = TrailFilterAlgorithm(
+                    self.width, self.height, self.noise_filter_threshold_us
+                )
+            elif self.noise_filter_type == "stc":
+                self.noise_filter = SpatioTemporalContrastAlgorithm(
+                    self.width, self.height, self.noise_filter_threshold_us, True
+                )
+            elif self.noise_filter_type == "anti_flicker":
+                self.noise_filter = self._create_anti_flicker_filter()
+            else:
+                self.noise_filter_type = "none"
+                return
+
+            self.noise_filter_output = self.noise_filter.get_empty_output_buffer()
+            self._report_status(
+                "[NoiseFilter] Enabled "
+                f"{NOISE_FILTER_DISPLAY_NAMES[self.noise_filter_type]} "
+                f"(threshold={self.noise_filter_threshold_us}us)"
+            )
+        except Exception as exc:
+            self._report_status(f"[NoiseFilter] Failed to initialize {self.noise_filter_type}: {exc}")
+            self.noise_filter_type = "none"
+            self.noise_filter = None
+            self.noise_filter_output = None
+
+    def _create_anti_flicker_filter(self):
+        if AntiFlickerAlgorithm is None:
+            raise RuntimeError("AntiFlickerAlgorithm is unavailable")
+
+        if FrequencyEstimationConfig is not None:
+            flicker_config = FrequencyEstimationConfig()
+            for attr, value in (
+                ("filter_length", 7),
+                ("min_freq", 50.0),
+                ("max_freq", 70.0),
+                ("diff_thresh_us", self.noise_filter_threshold_us),
+                ("threshold", self.noise_filter_threshold_us),
+            ):
+                if hasattr(flicker_config, attr):
+                    setattr(flicker_config, attr, value)
+            try:
+                return AntiFlickerAlgorithm(self.width, self.height, flicker_config)
+            except TypeError:
+                pass
+
+        constructor_attempts = (
+            (self.width, self.height, 7, 50.0, 70.0, self.noise_filter_threshold_us),
+            (self.width, self.height, 50.0, 70.0, self.noise_filter_threshold_us),
+            (self.width, self.height, self.noise_filter_threshold_us),
+        )
+        last_error = None
+        for args in constructor_attempts:
+            try:
+                return AntiFlickerAlgorithm(*args)
+            except TypeError as exc:
+                last_error = exc
+        raise RuntimeError(f"AntiFlicker constructor is not compatible: {last_error}")
+
+    def _report_status(self, message):
+        print(message)
+        self.status_signal.emit(message)
+
+    def _apply_noise_filter(self, events):
+        if self.noise_filter is None or events is None or len(events) == 0:
+            return events
+
+        try:
+            event_cd = _to_event_cd(events)
+            self.noise_filter.process_events(event_cd, self.noise_filter_output)
+            try:
+                return self.noise_filter_output.numpy(copy=True)
+            except TypeError:
+                return self.noise_filter_output.numpy().copy()
+        except Exception as exc:
+            if not self._noise_filter_warning_printed:
+                print(f"[NoiseFilter] Filtering failed, passing raw events through: {exc}")
+                self._noise_filter_warning_printed = True
+            return events
+
     def run(self):
+        self._init_noise_filter()
         self._start_workers(self.palette_type)
 
         if self.is_aedat4:
@@ -481,6 +685,7 @@ class CameraThread(QThread):
 
             if len(frame_events) > 0:
                 frame_events = filter_events_by_roi(frame_events, self._roi_tuple())
+                frame_events = self._apply_noise_filter(frame_events)
                 if len(frame_events) == 0:
                     next_frame_target_time += frame_interval_us
                     continue
@@ -538,12 +743,11 @@ class CameraThread(QThread):
     
     def _run_aedat4_loop(self):
     # 第一帧不受fps间隔限制，而是第一个事件包里面所有事件进行成像处理
-        # ======== 1. UI 渲染变量 (约 33.3ms) ========
+        # ======== 2. 神经网络变量 (精准 20.0ms) ========
         frame_buffer = dv.EventStore()
         next_frame_time = None
         frame_interval_us = int(1_000_000 / self.fps)
-        
-        # ======== 2. 神经网络变量 (精准 20.0ms) ========
+
         nn_buffer = []
         next_nn_time = None
 
@@ -559,7 +763,6 @@ class CameraThread(QThread):
             if events.isEmpty():
                 continue
 
-            # aedat4 的专有格式：EventStore 喂给画面，Numpy 喂给网络
             frame_buffer.add(events)
             arr = events.numpy()
             
@@ -575,7 +778,7 @@ class CameraThread(QThread):
                 nn_buffer.append(arr_for_nn)
 
             # ---------------------------------------------------------
-            # 任务 A：UI 画面渲染 (攒够帧率对应的时间出图)
+            # 浠诲姟 A锛歎I 鐢婚潰娓叉煋 (鏀掑甯х巼瀵瑰簲鐨勬椂闂村嚭鍥?
             # ---------------------------------------------------------
             if arr['timestamp'][-1] >= next_frame_time:
                 image_bgr = self.dv_visualizer.generateImage(frame_buffer)
@@ -585,7 +788,6 @@ class CameraThread(QThread):
                     self.image_signal.emit(image_rgb.copy(), int(arr['timestamp'][-1]))
 
                 frame_buffer = dv.EventStore()
-                # 更新下一帧的目标时间
                 next_frame_time += frame_interval_us
 
             # ---------------------------------------------------------
@@ -598,11 +800,17 @@ class CameraThread(QThread):
                     continue
 
                 buffer_events = np.concatenate(nn_buffer)
+                time_field = _event_time_field(buffer_events)
+                if time_field is None:
+                    print("[Camera] aedat4 events do not contain a timestamp field")
+                    nn_buffer = []
+                    next_nn_time += self.nn_interval_us
+                    continue
 
                 # 只要剩余数据的最新时间戳 >= 20ms 的目标时间，就一直切！
-                while len(buffer_events) > 0 and buffer_events['timestamp'][-1] >= next_nn_time:
+                while len(buffer_events) > 0 and buffer_events[time_field][-1] >= next_nn_time:
                     # 使用 searchsorted 找到刚好等于或略微超过 20ms 的那条数据索引
-                    split_idx = np.searchsorted(buffer_events['timestamp'], next_nn_time)
+                    split_idx = np.searchsorted(buffer_events[time_field], next_nn_time)
                     
                     # 🔪 手起刀落，切出极其精准的 20ms 事件段！
                     nn_chunk = buffer_events[:split_idx]
@@ -648,6 +856,7 @@ class CameraThread(QThread):
                 continue
 
             evs = filter_events_by_roi(evs, self._roi_tuple())
+            evs = self._apply_noise_filter(evs)
             if len(evs) == 0:
                 continue
 
@@ -690,4 +899,5 @@ class CameraThread(QThread):
                 self.is_recording = False
 
     image_signal = pyqtSignal(object, int)
+    status_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()

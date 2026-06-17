@@ -10,6 +10,7 @@ sys.path.append(current_dir)
 sys.path.append(os.path.join(current_dir, "backend"))
 
 from backend.realtime_inference import EventMambaPredictor
+from backend.protocol import make_error_response
 
 
 class InferenceServer:
@@ -49,12 +50,12 @@ class InferenceServer:
                 if isinstance(data, dict) and data.get("msg_type") == "PING":
                     self.socket.send_string("READY")
                     continue
-                result_text = self.model.process_data(data)
-                self.socket.send_string(result_text)
+                result = self.model.process_data(data)
+                self.socket.send_pyobj(result)
             except Exception as e:
                 print(f"推理循环出错: {e}")
                 try:
-                    self.socket.send_string(f"Error: {str(e)}")
+                    self.socket.send_pyobj(make_error_response(f"Error: {str(e)}"))
                 except Exception:
                     pass
 

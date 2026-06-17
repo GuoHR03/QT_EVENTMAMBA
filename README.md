@@ -1,146 +1,94 @@
 # UI_Event
 
-基于 `PyQt6` 的事件相机可视化与推理工具，支持实时采集、离线回放、ROI 设置、WSL 后端推理，以及预测结果叠加显示。
-
-项目地址：
-`https://github.com/GuoHR03/QT_EVENTMAMBA`
+基于 PyQt6 的事件相机可视化与 EventMamba 推理工具，支持实时相机采集、离线文件回放、ROI 设置、去噪配置、WSL 后端推理，以及预测结果叠加显示。
 
 ## 当前状态
 
-- `center` 模式已接入真实网络，输出瞳孔中心点 `(x, y)`
-- `ellipse` 模式已接入真实推理链路，输出 `[x, y, a, b, angle]`
-- 前后端按当前模式单次只加载一个权重文件
-- 椭圆模式会自动读取权重同目录下的 `matrix_A.pt`
+- 支持 `center` 中心点预测，输出 `(x, y)`
+- 支持 `ellipse` 椭圆预测，输出 `[x, y, a, b, angle]`
+- 支持 `RAW / HDF5 / H5 / AEDAT4` 离线回放
+- 支持 Activity / Trail / STC / AntiFlicker 等 Metavision 去噪配置
+- 前端与后端通过 ZeroMQ 通信
+- Windows 端负责 UI、相机与显示，WSL 端负责模型推理
 
-## 主要功能
-
-- 事件相机实时采集
-- `AEDAT4 / RAW / H5(HDF5)` 离线回放
-- ROI 选择与动态更新
-- `center / ellipse` 两种预测模式切换
-- Windows -> WSL 的 `ZeroMQ` 推理通信
-- 推理结果与图像时间对齐显示
-- 椭圆预测结果前端叠加绘制
-
-## 目录结构
+## 项目结构
 
 ```text
 UI_Event/
+├── main.py
+├── linux_backend.py
 ├── app/
-│   ├── widget.py
+│   ├── widget.py              # 主窗口协调
+│   ├── controller.py          # UI 到后端的控制层
+│   ├── view_state.py          # 按钮和标签状态
+│   ├── prediction_state.py    # 预测缓存与时间匹配
+│   ├── prediction_overlay.py  # 预测结果绘制
+│   ├── file_dialogs.py        # 文件选择
+│   ├── paths.py               # 默认路径
+│   ├── settings.py            # 应用设置
+│   ├── theme.py               # 样式
 │   ├── form.ui
-│   ├── choose_windows.py
 │   └── choose_form.ui
 ├── backend/
-│   ├── __init__.py
-│   ├── api.py
-│   ├── Camera.py
-│   ├── NetworkThread.py
-│   ├── realtime_inference.py
+│   ├── api.py                 # 后端统一门面
+│   ├── camera_service.py      # 相机与录制管理
+│   ├── inference_service.py   # WSL 推理服务管理
+│   ├── Camera.py              # 底层相机/离线流处理
+│   ├── NetworkThread.py       # ZMQ 请求响应线程
+│   ├── realtime_inference.py  # 模型推理封装
+│   ├── protocol.py            # 后端消息协议
 │   └── models/
-│       ├── __init__.py
-│       ├── eventmamba_v1.py
-│       ├── eventmamba_v3.py
-│       ├── mamba_layer.py
-│       ├── modules.py
-│       └── vsa.py
-├── linux_backend.py
-├── train_ini30_vsa.py
-├── VERSION.md
-└── pyproject.toml
+├── libs/                      # Metavision 运行依赖
+├── checkpoint/                # 模型权重目录
+├── record/                    # 录制/离线文件目录
+└── wsl/                       # WSL 相关资源
 ```
-
-## 推理模式说明
-
-### `center`
-
-- 前端启动后端时传入 `--center-weights <path>`
-- 后端加载中心点网络
-- 输出格式为 `[x, y]`
-
-### `ellipse`
-
-- 前端启动后端时传入 `--ellipse-weights <path>`
-- 后端加载椭圆网络 `eventmamba_v3`
-- 同时自动读取权重同目录下的 `matrix_A.pt`
-- 输出格式为 `[x, y, a, b, angle]`
-- 其中：
-  - `x, y, a, b` 归一化到 `[0, 1]`
-  - `angle` 范围为 `[-0.5π, 0.5π]`
-
-## 椭圆绘制说明
-
-- 椭圆绘制在前端 [app/widget.py](/E:/Code/Qt/UI_Event-main/app/widget.py) 中完成
-- `angle` 会先从弧度转换为角度，再交给 `QPainter.rotate()`
-- `a / b` 会按当前图像尺寸缩放
-- 如果结果来自裁剪后的 ROI，椭圆半轴会按 ROI 尺寸缩放
 
 ## 运行方式
 
-### 环境要求
+建议从项目根目录启动：
+
+```bash
+python main.py
+```
+
+QtCreator 中也建议将启动脚本设置为 `main.py`。
+
+## 环境要求
 
 - Windows 10/11
 - Python 3.8+
+- PyQt6
+- pyzmq
+- numpy
+- opencv-python
+- torch
 - WSL2
 - Metavision SDK
-
-### 安装依赖
-
-```bash
-pip install PyQt6 pyzmq torch numpy opencv-python
-```
-
-### 启动主程序
-
-```bash
-python app/widget.py
-```
-
-### 手动启动 WSL 后端
-
-`center` 模式：
-
-```bash
-wsl -d EventMamba_mini /opt/miniconda3/envs/eventmamba/bin/python linux_backend.py --center-weights /path/to/center_model.pth
-```
-
-`ellipse` 模式：
-
-```bash
-wsl -d EventMamba_mini /opt/miniconda3/envs/eventmamba/bin/python linux_backend.py --ellipse-weights /path/to/ellipse_model.pth
-```
-
-## 椭圆模型文件要求
-
-椭圆模式至少需要：
-
-- 椭圆权重文件，例如 `P3best_checkpoint.pth`
-- 同目录下的 `matrix_A.pt`
-
-示例：
-
-```text
-some_folder/
-├── P3best_checkpoint.pth
-└── matrix_A.pt
-```
 
 ## 环境变量
 
 ```bash
 EVENTMAMBA_WSL_DISTRO=EventMamba_mini
 EVENTMAMBA_LINUX_PYTHON=/opt/miniconda3/envs/eventmamba/bin/python
+EVENTMAMBA_BACKEND_READY_TIMEOUT_S=180
+METAVISION_SDK_PATH=E:\Metavision\Prophesee
 ```
 
-## 使用说明
+## 模型文件
 
-1. 启动程序后选择输入源或实时相机
-2. 根据需要打开 ROI 窗口，并切换 `center / ellipse`
-3. 选择与当前模式对应的权重文件
-4. 点击加载模型
-5. 启动相机或开始离线回放
-6. 在主界面查看中心点或椭圆预测结果
+`ellipse` 模式需要权重文件同目录下存在 `matrix_A.pt`：
 
-## 版本记录
+```text
+checkpoint/
+└── your_model/
+    ├── P3best_checkpoint.pth
+    └── matrix_A.pt
+```
 
-详见 [VERSION.md](VERSION.md)
+## 维护说明
+
+- `build/`、`dist/`、`installer/` 是构建产物，可以重新生成
+- `__pycache__/` 是 Python 缓存，可以删除
+- `eventmamba_backend.log` 是运行日志，可以删除
+- 主程序不再依赖训练脚本，训练/实验脚本不应混入主运行链路

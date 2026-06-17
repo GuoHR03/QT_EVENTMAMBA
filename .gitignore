@@ -1,35 +1,47 @@
-# 排除虚拟环境 (最重要的)
-.qtcreator/Python_3_8_10venv/
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
 
-# 排除 Qt Creator 自动生成的本地配置
+# Local environments and IDE files
+.conda/
 .qtcreator/
+.vscode/
 *.user
 
-# 排除 Python 缓存
-__pycache__/
-*.pyc
-
-# 排除录制的大型原始数据
-recordings/
+# Runtime data and logs
+*.log
+eventmamba_backend.log
 *.raw
 *.raw.tmp_index
 *.dat
 
-# 排除模型权重文件
-app/checkpoint/
-backend/Eventmamba/checkpoint/
+# Model weights
 *.pth
 *.pt
+app/checkpoint/
+backend/Eventmamba/checkpoint/
 
-# 排除构建文件
+# Build outputs
 build/
+dist/
+installer/
+wsl/*.tar
+
+# Packaging files kept in source
 *.spec
 *.iss
+!UI_Event.spec
+!installer.iss
 
-# 排除安装脚本
+# Helper scripts kept in source
 install_wsl.bat
 uninstall_wsl.bat
 run_app.bat
+!install_wsl.bat
+!uninstall_wsl.bat
+!run_app.bat
 
-# 排除优化说明文档
+# Historical notes
 OPTIMIZATION_NOTES.md

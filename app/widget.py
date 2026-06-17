@@ -1,40 +1,49 @@
 import sys
-import os
 import traceback
-import ast
-import math
-from PyQt6.QtWidgets import QApplication, QWidget
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
-from PyQt6.QtCore import QPointF
-from PyQt6.QtWidgets import QFileDialog
+
+try:
+    from .bootstrap import app_resource_path, configure_runtime
+except ImportError:
+    from bootstrap import app_resource_path, configure_runtime
+
+configure_runtime(__file__)
+
 from PyQt6 import uic
-from choose_windows import ChooseWindow
-base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-root_dir = os.path.abspath(os.path.join(base_dir, ".."))
-if os.path.isdir(os.path.join(root_dir, "backend")) and root_dir not in sys.path:
-    sys.path.insert(0, root_dir)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import QApplication, QWidget
 
-sdk_root = os.environ.get("METAVISION_SDK_PATH", "E:\\Metavision\\Prophesee")
-extra_dll_dirs = [
-    os.path.join(root_dir, "libs", "bin"),
-    os.path.join(sdk_root, "bin"),
-    os.path.join(sdk_root, "third_party", "bin"),
-    os.path.join(sdk_root, "lib", "hdf5", "plugin"),
-]
-for dll_dir in extra_dll_dirs:
-    if os.path.isdir(dll_dir):
-        os.add_dll_directory(dll_dir)
+try:
+    from .choose_windows import ChooseWindow
+    from .controller import AppController
+    from .file_dialogs import choose_input_file, choose_weights_file
+    from .log_formatter import backend_message, mode_display_name, noise_settings_message, roi_settings_message
+    from .prediction_overlay import draw_prediction
+    from .prediction_state import PredictionState
+    from .settings import AppSettings
+    from .theme import apply_app_theme
+    from .view_state import MainViewState
+except ImportError:
+    from choose_windows import ChooseWindow
+    from controller import AppController
+    from file_dialogs import choose_input_file, choose_weights_file
+    from log_formatter import backend_message, mode_display_name, noise_settings_message, roi_settings_message
+    from prediction_overlay import draw_prediction
+    from prediction_state import PredictionState
+    from settings import AppSettings
+    from theme import apply_app_theme
+    from view_state import MainViewState
 
-from backend.api import BackendAPI
+SUPPORTED_PALETTES = {"Dark", "Light", "CoolWarm", "Gray"}
 
 
 def exception_hook(exctype, value, tb):
-    print("\n========== [!] 捕捉到致命崩溃 [!] ==========")
+    print("\n========== [!] 捕获到致命崩溃 [!] ==========")
     traceback.print_exception(exctype, value, tb)
     print("==========================================\n")
     input("程序已崩溃，请查看上方报错信息，然后按回车键退出...")
     sys.exit(1)
+
 
 sys.excepthook = exception_hook
 
@@ -42,13 +51,21 @@ sys.excepthook = exception_hook
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        ui_path = os.path.join(base_dir, "form.ui")
-        uic.loadUi(ui_path, self)
+        uic.loadUi(app_resource_path("form.ui"), self)
+        apply_app_theme(self)
+        self.resize(1180, 780)
 
-        # 信号与槽
+        self.settings = AppSettings()
+        self.controller = AppController(self.settings)
+        self.view_state = MainViewState(self)
+        self.predictions = PredictionState(interval_ms=20)
+
+        self._connect_signals()
+        self._init_view_state()
+
+    def _connect_signals(self):
         self.start_camera_button.clicked.connect(self.toggle_camera)
         self.record_button.clicked.connect(self.toggle_recording)
-        self.record_button.setEnabled(False)
         self.roi_window_button.clicked.connect(self.show_roi_window)
         self.palette_combo_box.currentTextChanged.connect(self.restart_camera_if_running)
         self.fps_spin_box.valueChanged.connect(self.restart_camera_if_running)
@@ -56,46 +73,37 @@ class MainWindow(QWidget):
         self.load_model_button.clicked.connect(self.load_eventmamba)
         self.unload_model_button.clicked.connect(self.unload_eventmamba)
         self.select_input_file_button.clicked.connect(self.select_input_file)
-        self.unload_model_button.setEnabled(False)
-        self.log_text_edit.document().setMaximumBlockCount(500)
+        self.controller.connect_view(
+            self._display_image_with_prediction,
+            self.log_text_edit.append,
+            self._buffer_prediction_result,
+            self.handle_playback_finished,
+        )
 
-        # 变量
-        self.backend = BackendAPI()
-        self.backend.image_signal.connect(self._display_image_with_prediction)
-        self.backend.prediction_signal.connect(self._buffer_prediction_result)
-        self.backend.playback_finished_signal.connect(self.handle_playback_finished)
-        self.input_file_path = None
-        self.weight_path = None
-        self.last_prediction = None
-        self.last_prediction_mode = None
-        self.prediction_buffer = {}
-        self.nn_interval_ms = 20
-        self.current_roi = None
-        self.current_cam_size = None
-        self.prediction_mode = "center"
+    def _init_view_state(self):
+        self.log_text_edit.document().setMaximumBlockCount(500)
+        self.weight_path_label.setToolTip(self.weight_path_label.text())
+        self.input_file_label.setToolTip(self.input_file_label.text())
+        self.view_state.set_camera_stopped()
+        self.view_state.set_recording_stopped(enabled=False)
+        self.view_state.set_model_unloaded()
+
     def toggle_camera(self):
-        """切换相机或离线文件播放状态。"""
-        if not self.backend.is_camera_running():
-            self.backend.start_camera(
-                self.palette_combo_box.currentText(),
-                self.fps_spin_box.value(),
-                self.current_roi
-            )
-            self.start_camera_button.setText("停止相机")
-            self.record_button.setEnabled(True)
+        if not self.controller.is_camera_running():
+            self._sync_capture_settings_from_ui()
+            self.controller.start_camera()
+            self.view_state.set_camera_running()
         else:
             self.stop_camera()
 
     def toggle_recording(self):
-        if self.backend.is_camera_running() and self.backend.camera_thread:
-            if not self.backend.camera_thread.is_recording:
-                self.backend.start_recording()
-                self.record_button.setText("停止录制")
-                self.record_button.setStyleSheet("background-color: red; color: white;")
-            else:
-                self.backend.stop_recording()
-                self.record_button.setText("开始录制")
-                self.record_button.setStyleSheet("")
+        recording_started = self.controller.toggle_recording()
+        if recording_started is None:
+            return
+        if recording_started:
+            self.view_state.set_recording_running()
+        else:
+            self.view_state.set_recording_stopped(enabled=True)
 
     def _display_image_with_prediction(self, cv_img, img_timestamp):
         if hasattr(cv_img, "flags") and not cv_img.flags["C_CONTIGUOUS"]:
@@ -110,274 +118,139 @@ class MainWindow(QWidget):
             bytes_per_line = width
             img_format = QImage.Format.Format_Grayscale8
 
-        frame_end_time = img_timestamp
-        frame_start_time = frame_end_time - int(self.nn_interval_ms * 1000)
-
-        matched_pred = None
-        matched_mode = None
-        matched_cropped = False
-        sorted_ts = sorted(self.prediction_buffer.keys())
-        for ts_key in sorted_ts:
-            if frame_start_time <= ts_key <= frame_end_time:
-                matched_pred, matched_mode, matched_cropped = self.prediction_buffer[ts_key]
-                break
-        if matched_pred is None:
-            for ts_key in sorted_ts:
-                if ts_key <= frame_end_time:
-                    matched_pred, matched_mode, matched_cropped = self.prediction_buffer[ts_key]
-                else:
-                    break
-
-        for ts_key in list(self.prediction_buffer.keys()):
-            if ts_key < frame_end_time - 200000:
-                del self.prediction_buffer[ts_key]
-
         q_img = QImage(cv_img.data, width, height, bytes_per_line, img_format)
-        if matched_pred is not None:
-            px, py = self._map_prediction_to_pixel(
-                matched_pred, matched_mode, matched_cropped, width, height
-            )
-            if px is not None and py is not None:
-                painter = QPainter(q_img)
-                pen = QPen(QColor(255, 0, 0))
-                pen.setWidth(3)
-                painter.setPen(pen)
-                painter.setBrush(QColor(255, 0, 0, 80))
-                if self.prediction_mode == "ellipse" and len(matched_pred) >= 5:
-                    cx, cy, major, minor, angle = matched_pred
-                    if matched_cropped and self.current_roi:
-                        _, _, roi_width, roi_height = self.current_roi
-                        ellipse_width = roi_width
-                        ellipse_height = roi_height
-                    else:
-                        ellipse_width = width
-                        ellipse_height = height
-                    scaled_major = major * ellipse_width
-                    scaled_minor = minor * ellipse_height
-                    angle_deg = math.degrees(angle)
-                    painter.save()
-                    painter.translate(px, py)
-                    painter.rotate(angle_deg)
-                    painter.drawEllipse(QPointF(0, 0), scaled_major, scaled_minor)
-                    painter.restore()
-                else:
-                    painter.drawEllipse(px - 8, py - 8, 16, 16)
-                painter.end()
+        matched_prediction = self.predictions.match_frame(img_timestamp)
+        if matched_prediction is not None:
+            draw_prediction(q_img, matched_prediction, width, height, self.settings.roi)
 
         pixmap = QPixmap.fromImage(q_img)
-        self.camera_image_label.setPixmap(pixmap.scaled(
-            self.camera_image_label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.FastTransformation
-        ))
+        self.camera_image_label.setPixmap(
+            pixmap.scaled(
+                self.camera_image_label.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+        )
 
     def _buffer_prediction_result(self, result, pred_timestamp):
-        if not isinstance(result, str):
-            self.log_text_edit.append(str(result))
-            return
-        self.log_text_edit.append(result)
-        marker = "输出结果为："
-        if marker not in result:
-            return
-        parts = result.split(marker, 1)[1].strip()
-        is_cropped = False
-        if "|cropped:" in parts:
-            main_part, cropped_part = parts.rsplit("|cropped:", 1)
-            is_cropped = cropped_part.strip().lower() == "true"
-            payload = main_part.strip()
-        else:
-            payload = parts
-        try:
-            values = ast.literal_eval(payload)
-        except Exception:
-            return
-        if not isinstance(values, (list, tuple)) or len(values) < 2:
-            return
-        x, y = values[0], values[1]
-        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
-            return
-
-        if len(values) >= 5 and self.prediction_mode == "ellipse":
-            major, minor, angle = values[2], values[3], values[4]
-            pred_data = (float(x), float(y), float(major), float(minor), float(angle))
-        else:
-            pred_data = (float(x), float(y))
-
-        if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
-            pred_mode = "norm"
-        else:
-            pred_mode = "pixel"
-        self.prediction_buffer[pred_timestamp] = (pred_data, pred_mode, is_cropped)
-        self.last_prediction = pred_data
-        self.last_prediction_mode = pred_mode
+        self.log_text_edit.append(backend_message(result))
+        self.predictions.add_result(result, pred_timestamp, self.settings.prediction_mode)
 
     def closeEvent(self, event):
-        """关闭程序"""
-        self.backend.close()
+        self.controller.close()
         event.accept()
 
     def restart_camera_if_running(self):
-        """参数变化后重启当前播放源。"""
-        if self.backend.is_camera_running():
-            self.toggle_camera() # 停止旧相机
-            QApplication.processEvents()
-            self.toggle_camera() # 带着新选的颜色重新启动相机
+        if not self.controller.is_camera_running():
+            return
+        QApplication.processEvents()
+        self._sync_capture_settings_from_ui()
+        self.controller.restart_camera_if_running()
 
     def handle_playback_finished(self):
-        """文件播放完后的自动处理"""
         self.stop_camera()
 
     def stop_camera(self):
-        """停止相机或离线文件播放并重置 UI 状态。"""
-        self.backend.stop_camera()
-
-        self.start_camera_button.setText("启动相机")
-        self.record_button.setEnabled(False)
-        self.record_button.setText("开始录制")
-        self.record_button.setStyleSheet("")
+        self.controller.stop_camera()
+        self.view_state.set_camera_stopped()
+        self.view_state.set_recording_stopped(enabled=False)
         self.camera_image_label.setText("相机未启动")
-        self.current_cam_size = None
-        self.prediction_buffer.clear()
+        self.predictions.clear()
 
     def select_input_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择离线视频文件",
-            r"E:\Code\Qt\UI_Event-main\record",
-            "视频(*.raw *.hdf5 *.h5 *.aedat4);;所有文件 (*)"
-        )
-        if file_path:
-            self.input_file_path = file_path
-            self.backend.set_input_file(file_path)
-            self.input_file_label.setText(os.path.basename(file_path))
-            if self.backend.is_camera_running():
-                self.toggle_camera()
+        file_path = choose_input_file(self)
+        if not file_path:
+            return
+
+        self.view_state.set_input_file(file_path)
+        QApplication.processEvents()
+        self._sync_capture_settings_from_ui()
+        self.controller.set_input_file(file_path, restart_if_running=True)
 
     def select_weight_file(self):
-        pt_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择权重文件",
-            r"E:\Code\Qt\UI_Event-main\checkpoint",
-            "pth (*.pth);;所有文件 (*)"
-        )
-        if pt_path:
-            self.weight_path = pt_path
-            self.weight_path_label.setText(os.path.basename(pt_path))
-            if self.backend.is_camera_running():
-                self.toggle_camera()
+        weights_path = choose_weights_file(self)
+        if not weights_path:
+            return
+
+        self.view_state.set_weight_file(weights_path)
+        stopped_running_model = self.controller.set_weights_path(weights_path)
+        if stopped_running_model:
+            self.view_state.set_model_unloaded()
+            self.predictions.clear()
+            self.log_text_edit.append("已选择新权重，请重新加载模型")
 
     def load_eventmamba(self):
-        """加载Eventmamba模型以及网络通信"""
-        if self.weight_path is None:
+        if self.controller.weights_path is None:
             self.log_text_edit.append("请先选择权重文件")
             return
 
-        self.load_model_button.setEnabled(False)
-        self.unload_model_button.setEnabled(False)
-        self.select_weight_button.setEnabled(False)
-        self.load_model_button.setText("Loading...")
+        self.view_state.set_model_loading()
         self.log_text_edit.append(
-            f"正在启动 WSL 推理服务并加载 {self.prediction_mode} 模式权重，首次加载可能需要几秒钟..."
+            f"正在启动 WSL 推理服务并加载{mode_display_name(self.settings.prediction_mode)}模式权重，首次加载可能需要几秒钟..."
         )
         QApplication.processEvents()
 
         try:
-            self.backend.start_eventmamba(self.weight_path)
+            self.controller.load_model()
         except Exception as exc:
-            self.load_model_button.setEnabled(True)
-            self.select_weight_button.setEnabled(True)
-            self.load_model_button.setText("Load EventMamba")
-            self.log_text_edit.append(f"加载 EventMamba 失败: {exc}")
+            self.view_state.set_model_unloaded()
+            self.log_text_edit.append(f"加载模型失败：{exc}")
             return
 
         self.log_text_edit.append("WSL 推理服务已就绪，权重加载完成")
-        self.load_model_button.setText("Loaded")
-        self.load_model_button.setEnabled(False)
-        self.unload_model_button.setEnabled(True)
-        self.select_weight_button.setEnabled(True)
+        self.view_state.set_model_loaded()
 
     def unload_eventmamba(self):
-        """关闭Eventmamba模型 以及WSL"""
-        print("关闭权重WSL")
-        self.backend.stop_eventmamba()
-        self.load_model_button.setEnabled(True)
-        self.unload_model_button.setEnabled(False)
-        self.select_weight_button.setEnabled(True)
-        self.load_model_button.setText("Load EventMamba")
+        self.controller.unload_model()
+        self.view_state.set_model_unloaded()
         self.log_text_edit.append("WSL 推理服务已关闭，可以重新选择权重并加载")
-        self.last_prediction = None
-        self.last_prediction_mode = None
-        self.prediction_buffer.clear()
-
-    def _map_prediction_to_pixel(self, pred, mode, is_cropped, width, height):
-        if is_cropped:
-            return self._map_cropped_prediction_to_pixel(pred, width, height)
-        if mode == "norm":
-            return self._map_normalized_prediction_to_pixel(pred, width, height)
-        return self._map_raw_prediction_to_pixel(pred, width, height)
-
-    def _map_cropped_prediction_to_pixel(self, pred, width, height):
-        if pred is None:
-            return None, None
-        x, y = pred[0], pred[1]
-        if self.current_roi:
-            roi_x, roi_y, roi_width, roi_height = self.current_roi
-            px = int(roi_x + x * roi_width)
-            py = int(roi_y + y * roi_height)
-            if px < 0 or py < 0 or px >= width or py >= height:
-                return None, None
-            return px, py
-
-        canonical_x = x * 512 + 96
-        canonical_y = y * 512 - 16
-        px = int(canonical_x * width / 640)
-        py = int(canonical_y * height / 480)
-        if px < 0 or py < 0 or px >= width or py >= height:
-            return None, None
-        return px, py
-
-    def _map_normalized_prediction_to_pixel(self, pred, width, height):
-        if pred is None:
-            return None, None
-        x, y = pred[0], pred[1]
-        px = int(x * width)
-        py = int(y * height)
-        if px < 0 or py < 0 or px >= width or py >= height:
-            return None, None
-        return px, py
-
-    def _map_raw_prediction_to_pixel(self, pred, width, height):
-        if pred is None:
-            return None, None
-        x, y = pred[0], pred[1]
-        px = int(x)
-        py = int(y)
-        if px < 0 or py < 0 or px >= width or py >= height:
-            return None, None
-        return px, py
+        self.predictions.clear()
 
     def show_roi_window(self):
-        self.roi_window = ChooseWindow()
-        self.roi_window.mode_confirmed.connect(self.on_mode_confirmed)
-        self.roi_window.roi_confirmed.connect(self.on_roi_confirmed)
-        self.on_mode_confirmed(self.roi_window.selected_mode())
+        self.roi_window = ChooseWindow(
+            initial_mode=self.settings.prediction_mode,
+            initial_roi=self.settings.roi,
+            initial_noise_filter_type=self.settings.noise_filter_type,
+            initial_noise_filter_threshold_us=self.settings.noise_filter_threshold_us,
+        )
+        self.roi_window.settings_confirmed.connect(self.on_settings_confirmed)
         self.roi_window.show()
 
-    def on_mode_confirmed(self, mode):
-        self.prediction_mode = mode
-        self.backend.set_prediction_mode(mode)
-        self.log_text_edit.append(f"Prediction mode set: {mode}")
+    def on_settings_confirmed(self, roi, mode, filter_type, threshold_us):
+        self._sync_capture_settings_from_ui()
+        camera_settings_changed = self.controller.apply_settings(
+            roi,
+            mode,
+            filter_type,
+            threshold_us,
+        )
+        if camera_settings_changed and self.controller.is_camera_running():
+            QApplication.processEvents()
 
-    def on_roi_confirmed(self, x, y, width, height, mode):
-        self.current_roi = (x, y, width, height)
-        self.prediction_mode = mode
-        self.backend.set_prediction_mode(mode)
-        self.log_text_edit.append(f"ROI 已设置: x={x}, y={y}, width={width}, height={height}, mode={mode}")
-        self.backend.update_camera_roi(self.current_roi)
+        self.log_text_edit.append(noise_settings_message(filter_type, self.settings.noise_filter_threshold_us))
+        if roi is not None:
+            self.log_text_edit.append(roi_settings_message(self.settings.roi, mode))
 
-if __name__ == "__main__":
+    def _selected_palette(self):
+        selected = self.palette_combo_box.currentText()
+        if selected in SUPPORTED_PALETTES:
+            return selected
+        return "Dark"
+
+    def _sync_capture_settings_from_ui(self):
+        self.controller.sync_capture_settings(
+            self._selected_palette(),
+            self.fps_spin_box.value(),
+        )
+
+
+def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
