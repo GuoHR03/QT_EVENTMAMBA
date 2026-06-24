@@ -4,10 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data as data
-import os
-print("\n" + "="*50)
-# 1. 查看你是在哪个目录下运行的这个脚本 (Current Working Directory)
-print(f" 1.  (getcwd): \n   {os.getcwd()}")
 from .modules import LocalGrouper
 from .mamba_layer import MambaBlock
 

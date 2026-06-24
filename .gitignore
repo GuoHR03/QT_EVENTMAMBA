@@ -12,6 +12,7 @@ __pycache__/
 
 # Runtime data and logs
 *.log
+*.err
 eventmamba_backend.log
 *.raw
 *.raw.tmp_index
@@ -36,12 +37,12 @@ wsl/*.tar
 !installer.iss
 
 # Helper scripts kept in source
-install_wsl.bat
-uninstall_wsl.bat
-run_app.bat
-!install_wsl.bat
-!uninstall_wsl.bat
-!run_app.bat
+scripts/*.bat
+scripts/*.ps1
+!scripts/install_wsl.bat
+!scripts/uninstall_wsl.bat
+!scripts/run_app.bat
+!scripts/build_installer.ps1
 
 # Historical notes
 OPTIMIZATION_NOTES.md

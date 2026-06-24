@@ -41,6 +41,8 @@ UI_Event/
 ├── libs/                      # Metavision 运行依赖
 ├── checkpoint/                # 模型权重目录
 ├── record/                    # 录制/离线文件目录
+├── scripts/                   # 安装、运行和打包辅助脚本
+├── tools/                     # 离线调试/实验工具脚本
 └── wsl/                       # WSL 相关资源
 ```
 
@@ -92,3 +94,4 @@ checkpoint/
 - `__pycache__/` 是 Python 缓存，可以删除
 - `eventmamba_backend.log` 是运行日志，可以删除
 - 主程序不再依赖训练脚本，训练/实验脚本不应混入主运行链路
+- 源码和文档统一使用 UTF-8 编码；如果 PowerShell 显示中文乱码，请用 `Get-Content -Encoding UTF8` 查看

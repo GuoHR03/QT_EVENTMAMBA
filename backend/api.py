@@ -1,9 +1,12 @@
 import queue
+import logging
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from backend.camera_service import CameraService
 from backend.inference_service import InferenceService
+
+LOGGER = logging.getLogger(__name__)
 
 
 class BackendAPI(QObject):
@@ -65,12 +68,12 @@ class BackendAPI(QObject):
         if self.camera.is_running():
             self.restart_camera(roi=roi)
         else:
-            print("[BackendAPI] 相机未运行，ROI 将在下次启动时生效")
+            LOGGER.info("Camera is not running; ROI will be applied on next start")
 
     def set_prediction_mode(self, mode):
         mode_changed = self.prediction_mode != mode
         self.prediction_mode = mode
-        print(f"[BackendAPI] 预测模式已设置为: {mode}")
+        LOGGER.info("Prediction mode set to: %s", mode)
         if mode_changed and self.is_inference_running() and self.inference.weights_path:
             self.restart_eventmamba()
 
@@ -88,7 +91,7 @@ class BackendAPI(QObject):
         )
         self.noise_filter_type = filter_type
         self.noise_filter_threshold_us = threshold_us
-        print(f"[BackendAPI] Noise filter: {filter_type}, threshold={threshold_us}us")
+        LOGGER.info("Noise filter: %s, threshold=%sus", filter_type, threshold_us)
 
         if changed and restart_camera and self.camera.is_running():
             self.restart_camera(roi=self.camera.current_roi())

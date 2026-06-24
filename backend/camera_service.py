@@ -1,4 +1,5 @@
 from backend.Camera import CameraThread
+from backend.settings import DEFAULT_FPS, DEFAULT_NOISE_FILTER_THRESHOLD_US
 
 
 class CameraService:
@@ -10,7 +11,7 @@ class CameraService:
         self.thread = None
         self.file_path = None
         self.last_palette = "Dark"
-        self.last_fps = 30
+        self.last_fps = DEFAULT_FPS
 
     def is_running(self):
         return self.thread is not None and self.thread.isRunning()
@@ -21,7 +22,14 @@ class CameraService:
     def set_input_file(self, file_path):
         self.file_path = file_path
 
-    def start(self, palette, fps, roi=None, noise_filter_type="none", noise_filter_threshold_us=10000):
+    def start(
+        self,
+        palette,
+        fps,
+        roi=None,
+        noise_filter_type="none",
+        noise_filter_threshold_us=DEFAULT_NOISE_FILTER_THRESHOLD_US,
+    ):
         self.last_palette = palette
         self.last_fps = fps
         if self.thread is not None:
@@ -45,7 +53,14 @@ class CameraService:
         self.thread.finished_signal.connect(self.finished_signal.emit)
         self.thread.start()
 
-    def restart(self, palette=None, fps=None, roi=None, noise_filter_type="none", noise_filter_threshold_us=10000):
+    def restart(
+        self,
+        palette=None,
+        fps=None,
+        roi=None,
+        noise_filter_type="none",
+        noise_filter_threshold_us=DEFAULT_NOISE_FILTER_THRESHOLD_US,
+    ):
         palette = palette if palette is not None else self.last_palette
         fps = fps if fps is not None else self.last_fps
         self.stop()

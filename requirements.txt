@@ -1,0 +1,8 @@
+PyQt6
+pyzmq
+numpy
+opencv-python
+h5py
+torch
+timm
+mamba-ssm
