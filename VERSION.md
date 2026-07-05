@@ -1,5 +1,42 @@
 # Version History
 
+## v7
+
+日期：2026-07-05
+
+### 离线回放与可视化统一
+
+- 统一支持 `RAW / H5 / HDF5 / AEDAT4` 离线事件文件回放。
+- `RAW / H5` 使用 Metavision `PeriodicFrameGenerationAlgorithm` 生成事件帧。
+- `AEDAT4` 新增项目内置 `EventFrameRenderer`，按 Metavision SDK 调色板颜色渲染事件帧。
+- 新增 `backend/palettes.py` 中的 Metavision 调色板映射测试，保证 AEDAT4 与 Metavision 显示颜色一致。
+
+### 回放时钟与播放控制
+
+- 新增 `backend/replay_clock.py`，统一 H5 和 AEDAT4 的真实时间回放节奏。
+- 新增 `backend/replay_speed.py`，支持播放倍速运行中热更新。
+- RAW 文件回放新增动态 replay wrapper，播放中修改 `0.25x / 0.5x / 1x / 2x / 4x` 不再重新打开文件。
+- 修正 Metavision `LiveReplayEventsIterator` 的参数语义差异，UI 中 `4x` 现在表示更快播放，`0.25x` 表示慢放。
+
+### 显示设置热更新
+
+- Palette 和 FPS 在播放过程中可以直接热更新，不再触发相机或文件重启。
+- RAW/H5 通过动态 Metavision frame generator 代理替换内部渲染器。
+- AEDAT4 renderer 支持运行中切换调色板。
+- H5/AEDAT4 的帧切分会读取最新 FPS，调高或调低 FPS 会影响后续帧生成。
+
+### 去噪、ROI 与推理链路
+
+- AEDAT4 显示和推理链路接入统一 ROI 与去噪处理。
+- 统一事件格式转换，减少不同文件格式在显示和推理前处理上的差异。
+- 保持预测结果按事件时间戳匹配图像帧后叠加显示。
+
+### 工具和测试
+
+- 新增 AEDAT4 profiling 和 AEDAT4 转 H5 工具脚本。
+- 新增 H5 source、AEDAT4 source、事件帧渲染器、回放时钟和动态 Metavision replay 的单元测试。
+- 全量测试覆盖提升到 `112` 项。
+
 ## v6
 
 日期：2026-06-17

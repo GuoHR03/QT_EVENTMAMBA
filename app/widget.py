@@ -35,13 +35,23 @@ except ImportError:
     from view_state import MainViewState
 
 SUPPORTED_PALETTES = {"Dark", "Light", "CoolWarm", "Gray"}
+REPLAY_SPEEDS = {
+    "0.25x": 0.25,
+    "0.5x": 0.5,
+    "1x": 1.0,
+    "2x": 2.0,
+    "4x": 4.0,
+}
 
 
 def exception_hook(exctype, value, tb):
     print("\n========== [!] 捕获到致命崩溃 [!] ==========")
     traceback.print_exception(exctype, value, tb)
     print("==========================================\n")
-    input("程序已崩溃，请查看上方报错信息，然后按回车键退出...")
+    try:
+        input("程序已崩溃，请查看上方报错信息，然后按回车键退出...")
+    except EOFError:
+        pass
     sys.exit(1)
 
 
@@ -67,8 +77,9 @@ class MainWindow(QWidget):
         self.start_camera_button.clicked.connect(self.toggle_camera)
         self.record_button.clicked.connect(self.toggle_recording)
         self.roi_window_button.clicked.connect(self.show_roi_window)
-        self.palette_combo_box.currentTextChanged.connect(self.restart_camera_if_running)
-        self.fps_spin_box.valueChanged.connect(self.restart_camera_if_running)
+        self.palette_combo_box.currentTextChanged.connect(self.update_display_settings)
+        self.fps_spin_box.valueChanged.connect(self.update_display_settings)
+        self.replay_speed_combo_box.currentTextChanged.connect(self.update_replay_speed)
         self.select_weight_button.clicked.connect(self.select_weight_file)
         self.load_model_button.clicked.connect(self.load_eventmamba)
         self.unload_model_button.clicked.connect(self.unload_eventmamba)
@@ -82,6 +93,7 @@ class MainWindow(QWidget):
 
     def _init_view_state(self):
         self.log_text_edit.document().setMaximumBlockCount(500)
+        self.replay_speed_combo_box.setCurrentText("1x")
         self.weight_path_label.setToolTip(self.weight_path_label.text())
         self.input_file_label.setToolTip(self.input_file_label.text())
         self.view_state.set_camera_stopped()
@@ -146,6 +158,14 @@ class MainWindow(QWidget):
         QApplication.processEvents()
         self._sync_capture_settings_from_ui()
         self.controller.restart_camera_if_running()
+
+    def update_replay_speed(self):
+        self._sync_capture_settings_from_ui()
+        self.controller.update_replay_factor()
+
+    def update_display_settings(self):
+        self._sync_capture_settings_from_ui()
+        self.controller.update_display_settings()
 
     def handle_playback_finished(self):
         self.stop_camera()
@@ -241,7 +261,11 @@ class MainWindow(QWidget):
         self.controller.sync_capture_settings(
             self._selected_palette(),
             self.fps_spin_box.value(),
+            self._selected_replay_factor(),
         )
+
+    def _selected_replay_factor(self):
+        return REPLAY_SPEEDS.get(self.replay_speed_combo_box.currentText(), 1.0)
 
 
 def main():

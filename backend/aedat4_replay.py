@@ -1,6 +1,7 @@
 import numpy as np
 
 from backend.event_processing import event_time_field
+from backend.replay_clock import replay_sleep_s, should_reset_replay_clock
 
 
 def init_aedat4_timing(first_timestamp, frame_interval_us, nn_interval_us, now):
@@ -31,12 +32,3 @@ def split_next_aedat4_nn_chunk(buffer_events, next_nn_time):
     split_idx = int(np.searchsorted(buffer_events[time_field], next_nn_time))
     return buffer_events[:split_idx], buffer_events[split_idx:], time_field
 
-
-def replay_sleep_s(target_sensor_time, start_sensor_time, start_real_time, now):
-    sensor_elapsed_s = (target_sensor_time - start_sensor_time) / 1_000_000.0
-    real_elapsed_s = now - start_real_time
-    return sensor_elapsed_s - real_elapsed_s
-
-
-def should_reset_replay_clock(sleep_time, threshold_s=-0.2):
-    return sleep_time < threshold_s

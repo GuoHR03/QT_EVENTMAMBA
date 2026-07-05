@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import time
 
 from backend.aedat4_source import run_aedat4_replay_loop
 from backend.camera_source_factory import SOURCE_AEDAT4, SOURCE_H5, SOURCE_METAVISION
@@ -10,7 +11,10 @@ from backend.metavision_source import run_metavision_event_loop
 @dataclass
 class CameraRunContext:
     fps: int
+    fps_getter: object
     nn_interval_us: int
+    replay_factor: float
+    replay_factor_getter: object
     is_running: object
     roi_getter: object
     image_callback: object
@@ -35,18 +39,18 @@ def run_camera_source(source_type, source, context):
 
 
 def _run_aedat4_source(source, context):
-    import dv_processing as dv
-
     run_aedat4_replay_loop(
         reader=source.reader,
-        visualizer=source.visualizer,
-        event_store_factory=dv.EventStore,
+        frame_generator=source.frame_generator,
         fps=context.fps,
         nn_interval_us=context.nn_interval_us,
         is_running=context.is_running,
         roi_getter=context.roi_getter,
-        image_callback=context.image_callback,
         nn_queue=context.nn_queue,
+        noise_filter=context.noise_filter,
+        replay_factor=context.replay_factor,
+        replay_factor_getter=context.replay_factor_getter,
+        fps_getter=context.fps_getter,
     )
 
 
@@ -67,6 +71,11 @@ def _run_h5_source(source, context):
             fps=context.fps,
             is_running=context.is_running,
             handle_frame_events=processor.handle_frame_events,
+            now=time.perf_counter,
+            sleep=time.sleep,
+            replay_factor=context.replay_factor,
+            replay_factor_getter=context.replay_factor_getter,
+            fps_getter=context.fps_getter,
         )
     finally:
         close_camera_source(source)

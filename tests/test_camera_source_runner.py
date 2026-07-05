@@ -67,12 +67,19 @@ def test_run_h5_source_runs_replay_and_closes_file(monkeypatch):
     assert calls["replay"]["events_dataset"] == [1, 2, 3]
     assert calls["replay"]["dtype_names"] == ("x", "y", "p", "t")
     assert calls["replay"]["handle_frame_events"] == calls["processor_instance"].handle_frame_events
+    assert callable(calls["replay"]["now"])
+    assert callable(calls["replay"]["sleep"])
+    assert calls["replay"]["replay_factor_getter"]() == 1.5
+    assert calls["replay"]["fps_getter"]() == 30
 
 
 def _context():
     return CameraRunContext(
         fps=30,
+        fps_getter=lambda: 30,
         nn_interval_us=20000,
+        replay_factor=1.5,
+        replay_factor_getter=lambda: 1.5,
         is_running=lambda: True,
         roi_getter=lambda: None,
         image_callback=lambda image, timestamp: None,

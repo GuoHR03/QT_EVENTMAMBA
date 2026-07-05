@@ -1,0 +1,77 @@
+from threading import Lock
+
+import numpy as np
+
+from backend.palettes import aedat4_rgb_palette
+
+
+class EventFrameRenderer:
+    """Render CD events into a BGR image using palette colors."""
+
+    def __init__(self, width, height, palette_type="Dark", frame_callback=None):
+        self.width = int(width)
+        self.height = int(height)
+        self.frame_callback = frame_callback
+        self.palette_type = palette_type
+        self._lock = Lock()
+        self._set_palette_colors(palette_type)
+        self._frame = np.empty((self.height, self.width, 3), dtype=np.uint8)
+
+    def set_display_settings(self, palette_type=None, fps=None):
+        if palette_type is None or palette_type == self.palette_type:
+            return False
+        with self._lock:
+            self.palette_type = palette_type
+            self._set_palette_colors(palette_type)
+        return True
+
+    def process_events(self, events):
+        if events is None or len(events) == 0 or self.frame_callback is None:
+            return
+
+        with self._lock:
+            background = self.background.copy()
+            positive_color = self.positive.copy()
+            negative_color = self.negative.copy()
+
+        self._frame[:, :] = background
+
+        x = np.asarray(events["x"], dtype=np.int64)
+        y = np.asarray(events["y"], dtype=np.int64)
+        valid = (x >= 0) & (x < self.width) & (y >= 0) & (y < self.height)
+        if not np.any(valid):
+            return
+
+        x = x[valid]
+        y = y[valid]
+        polarity = np.asarray(events["p"])[valid]
+        keep = _last_event_per_pixel(x, y, self.width)
+        x = x[keep]
+        y = y[keep]
+        polarity = polarity[keep]
+
+        positive = polarity > 0
+        if np.any(~positive):
+            self._frame[y[~positive], x[~positive]] = negative_color
+        if np.any(positive):
+            self._frame[y[positive], x[positive]] = positive_color
+
+        self.frame_callback(int(events["t"][-1]), self._frame.copy())
+
+    def _set_palette_colors(self, palette_type):
+        palette = aedat4_rgb_palette(palette_type)
+        self.background = _rgb_to_bgr(palette["bg"])
+        self.positive = _rgb_to_bgr(palette["pos"])
+        self.negative = _rgb_to_bgr(palette["neg"])
+
+
+def _rgb_to_bgr(color):
+    r, g, b = color
+    return np.array((b, g, r), dtype=np.uint8)
+
+
+def _last_event_per_pixel(x, y, width):
+    flat = y * width + x
+    _, reversed_indices = np.unique(flat[::-1], return_index=True)
+    keep = len(flat) - 1 - reversed_indices
+    return np.sort(keep)

@@ -2,6 +2,7 @@
 
 import queue
 import logging
+import time
 from PyQt6.QtCore import QThread, pyqtSignal
 from backend.camera_source_runner import CameraRunContext, run_camera_source
 from backend.camera_source_factory import (
@@ -19,6 +20,8 @@ from backend.event_processing import (
 from backend.inference_payload_worker import InferencePayloadWorker
 from backend.noise_filter import NoiseFilterPipeline
 from backend.recording import RawRecorder
+from backend.replay_clock import normalize_fps
+from backend.replay_speed import ReplaySpeedController, normalize_replay_factor
 from backend.settings import (
     DEFAULT_FPS,
     DEFAULT_NN_INTERVAL_MS,
@@ -43,6 +46,7 @@ class CameraThread(QThread):
         target_queue=None,
         file_path="",
         roi=None,
+        replay_factor=DEFAULT_REPLAY_FACTOR,
         noise_filter_type="none",
         noise_filter_threshold_us=DEFAULT_NOISE_FILTER_THRESHOLD_US,
     ):
@@ -54,9 +58,10 @@ class CameraThread(QThread):
         self.analysis_enabled = True
         self.input_path = file_path
         self.palette_type = palette_type
-        self.fps = fps if fps > 0 else DEFAULT_FPS
+        self.fps = normalize_fps(fps)
         self.nn_interval_us = int(nn_interval_ms * 1000)
-        self.replay_factor = DEFAULT_REPLAY_FACTOR
+        self.replay_factor = normalize_replay_factor(replay_factor)
+        self.replay_speed_controller = ReplaySpeedController(self.replay_factor)
         self.width = DEFAULT_SENSOR_WIDTH
         self.height = DEFAULT_SENSOR_HEIGHT
         self.noise_filter_type = _normalize_noise_filter_type(noise_filter_type)
@@ -66,6 +71,8 @@ class CameraThread(QThread):
             self.noise_filter_threshold_us,
             status_callback=self._report_status,
         )
+        self._last_frame_emit_time = None
+        self._frame_emit_interval_s = 1.0 / self.fps
 
         self.source_type = classify_input_source(self.input_path)
         self.is_aedat4 = self.source_type == SOURCE_AEDAT4
@@ -83,18 +90,29 @@ class CameraThread(QThread):
         self.roi_width = None
         self.roi_height = None
 
-        self._init_engine(palette_type)
-
     def _on_cd_frame_cb(self, ts, frame):
+        emit_time = time.perf_counter()
+        if (
+            self._last_frame_emit_time is not None
+            and emit_time - self._last_frame_emit_time < self._frame_emit_interval_s
+        ):
+            return
+
+        self._last_frame_emit_time = emit_time
         self.image_signal.emit(frame.copy(), int(ts))
 
     def _init_engine(self, palette_type):
         if self.is_aedat4:
-            self.source = create_aedat4_source(self.input_path, palette_type)
+            self.source = create_aedat4_source(
+                self.input_path,
+                palette_type,
+                fps=self.fps,
+                frame_callback=self._on_cd_frame_cb,
+            )
             source = self.source
             self.device = source.device
             self.dv_reader = source.reader
-            self.dv_visualizer = source.visualizer
+            self.event_frame_gen = source.frame_generator
             self.width = source.width
             self.height = source.height
             self._set_roi(self.requested_roi)
@@ -123,6 +141,7 @@ class CameraThread(QThread):
                 frame_callback=self._on_cd_frame_cb,
                 hardware_roi=self._roi_tuple(),
                 status_callback=self._report_status,
+                replay_factor_getter=self.replay_speed_controller.get,
             )
             source = self.source
             if source is None:
@@ -165,6 +184,12 @@ class CameraThread(QThread):
         self.status_signal.emit(message)
 
     def run(self):
+        self._init_engine(self.palette_type)
+        if self.source is None:
+            self.is_running = False
+            self.finished_signal.emit()
+            return
+
         self.noise_filter.initialize(self.width, self.height)
         self._start_workers(self.palette_type)
         run_camera_source(
@@ -172,7 +197,10 @@ class CameraThread(QThread):
             self.source,
             CameraRunContext(
                 fps=self.fps,
+                fps_getter=lambda: self.fps,
                 nn_interval_us=self.nn_interval_us,
+                replay_factor=self.replay_factor,
+                replay_factor_getter=self.replay_speed_controller.get,
                 is_running=lambda: self.is_running,
                 roi_getter=self._roi_tuple,
                 image_callback=self.image_signal.emit,
@@ -207,6 +235,22 @@ class CameraThread(QThread):
             )
         else:
             LOGGER.info("ROI cleared")
+
+    def set_replay_factor(self, replay_factor):
+        self.replay_factor = self.replay_speed_controller.set(replay_factor)
+        LOGGER.info("Replay speed updated: %sx", self.replay_factor)
+
+    def set_display_settings(self, palette_type=None, fps=None):
+        if palette_type is not None:
+            self.palette_type = palette_type
+        self.fps = normalize_fps(fps if fps is not None else self.fps)
+        self._frame_emit_interval_s = 1.0 / self.fps
+        self._last_frame_emit_time = None
+
+        frame_generator = getattr(self, "event_frame_gen", None)
+        if frame_generator is not None and hasattr(frame_generator, "set_display_settings"):
+            frame_generator.set_display_settings(self.palette_type, self.fps)
+        LOGGER.info("Display settings updated: palette=%s, fps=%s", self.palette_type, self.fps)
 
     def start_recording(self):
         self.is_recording = self.recorder.start(self.device)

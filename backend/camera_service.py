@@ -12,6 +12,7 @@ class CameraService:
         self.file_path = None
         self.last_palette = "Dark"
         self.last_fps = DEFAULT_FPS
+        self.last_replay_factor = 1.0
 
     def is_running(self):
         return self.thread is not None and self.thread.isRunning()
@@ -27,17 +28,20 @@ class CameraService:
         palette,
         fps,
         roi=None,
+        replay_factor=1.0,
         noise_filter_type="none",
         noise_filter_threshold_us=DEFAULT_NOISE_FILTER_THRESHOLD_US,
     ):
         self.last_palette = palette
         self.last_fps = fps
+        self.last_replay_factor = replay_factor
         if self.thread is not None:
             self.stop()
 
         kwargs = {
             "palette_type": palette,
             "fps": fps,
+            "replay_factor": replay_factor,
             "target_queue": self.frame_queue,
             "noise_filter_type": noise_filter_type,
             "noise_filter_threshold_us": noise_filter_threshold_us,
@@ -58,13 +62,26 @@ class CameraService:
         palette=None,
         fps=None,
         roi=None,
+        replay_factor=None,
         noise_filter_type="none",
         noise_filter_threshold_us=DEFAULT_NOISE_FILTER_THRESHOLD_US,
     ):
         palette = palette if palette is not None else self.last_palette
         fps = fps if fps is not None else self.last_fps
+        replay_factor = replay_factor if replay_factor is not None else self.last_replay_factor
         self.stop()
-        self.start(palette, fps, roi, noise_filter_type, noise_filter_threshold_us)
+        self.start(palette, fps, roi, replay_factor, noise_filter_type, noise_filter_threshold_us)
+
+    def set_replay_factor(self, replay_factor):
+        self.last_replay_factor = replay_factor
+        if self.thread is not None:
+            self.thread.set_replay_factor(replay_factor)
+
+    def set_display_settings(self, palette, fps):
+        self.last_palette = palette
+        self.last_fps = fps
+        if self.thread is not None:
+            self.thread.set_display_settings(palette, fps)
 
     def stop(self):
         if not self.thread:

@@ -2,6 +2,7 @@ import numpy as np
 
 from backend.event_processing import EVENT_CD_DTYPE
 from backend.settings import DEFAULT_FPS
+from backend.replay_clock import ReplayClock, frame_interval_us, replay_sleep_s
 
 
 def run_h5_replay_loop(
@@ -12,15 +13,16 @@ def run_h5_replay_loop(
     handle_frame_events,
     now,
     sleep,
+    replay_factor=1.0,
+    replay_factor_getter=None,
+    fps_getter=None,
     step=5000,
 ):
     total_events = len(events_dataset)
     current_idx = 0
     time_key, pol_key = select_h5_event_fields(dtype_names)
-    frame_interval_us = h5_frame_interval_us(fps)
-    start_real_time = now()
-    start_sensor_time = None
-    next_frame_target_time = None
+    frame_interval = _active_frame_interval_us(fps, fps_getter)
+    clock = None
 
     while is_running() and current_idx < total_events:
         events_for_this_frame = []
@@ -33,12 +35,14 @@ def run_h5_replay_loop(
                 current_idx = end_idx
                 continue
 
-            if start_sensor_time is None:
-                start_sensor_time = int(events["t"][0])
-                next_frame_target_time = start_sensor_time + frame_interval_us
-                start_real_time = now()
+            if clock is None:
+                active_replay_factor = replay_factor_getter() if replay_factor_getter is not None else replay_factor
+                clock = ReplayClock.start(events["t"][0], frame_interval, now(), active_replay_factor)
+            else:
+                current_frame_start = clock.next_frame_time - clock.frame_interval_us
+                clock.reschedule_next_frame(_active_frame_interval_us(fps, fps_getter), current_frame_start)
 
-            frame_part, _, reached_frame_boundary = split_events_for_frame(events, next_frame_target_time)
+            frame_part, _, reached_frame_boundary = split_events_for_frame(events, clock.next_frame_time)
             if reached_frame_boundary:
                 events_for_this_frame.append(frame_part)
                 current_idx = current_idx + len(frame_part)
@@ -54,19 +58,16 @@ def run_h5_replay_loop(
         if len(frame_events) > 0:
             handle_frame_events(frame_events)
 
-        next_frame_target_time += frame_interval_us
-        sleep_time = h5_replay_sleep_s(
-            next_frame_target_time,
-            start_sensor_time,
-            start_real_time,
-            now(),
+        current_frame_boundary = clock.next_frame_time
+        clock.reschedule_next_frame(_active_frame_interval_us(fps, fps_getter), current_frame_boundary)
+        clock.sleep_until(
+            clock.next_frame_time,
+            sleep,
+            now,
+            reset_sensor_time=current_frame_boundary,
+            replay_factor_getter=replay_factor_getter,
+            factor_reset_sensor_time=current_frame_boundary,
         )
-
-        if sleep_time > 0.005:
-            sleep(sleep_time)
-        elif sleep_time < -0.2:
-            start_real_time = now()
-            start_sensor_time = next_frame_target_time - frame_interval_us
 
 
 def select_h5_event_fields(dtype_names):
@@ -109,14 +110,15 @@ def split_events_for_frame(events, next_frame_target_time):
 
 
 def h5_frame_interval_us(fps):
-    fps = fps if fps > 0 else DEFAULT_FPS
-    return int(1_000_000 / fps)
+    return frame_interval_us(fps, DEFAULT_FPS)
 
 
 def h5_replay_sleep_s(next_frame_target_time, start_sensor_time, start_real_time, now):
-    sensor_elapsed_s = (next_frame_target_time - start_sensor_time) / 1_000_000.0
-    real_elapsed_s = now - start_real_time
-    return sensor_elapsed_s - real_elapsed_s
+    return replay_sleep_s(next_frame_target_time, start_sensor_time, start_real_time, now)
+
+
+def _active_frame_interval_us(fps, fps_getter=None):
+    return h5_frame_interval_us(fps_getter() if fps_getter is not None else fps)
 
 
 def _first_existing(names, candidates):

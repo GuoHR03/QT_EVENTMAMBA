@@ -7,9 +7,41 @@
 - 支持 `center` 中心点预测，输出 `(x, y)`
 - 支持 `ellipse` 椭圆预测，输出 `[x, y, a, b, angle]`
 - 支持 `RAW / HDF5 / H5 / AEDAT4` 离线回放
+- `RAW / H5` 使用 Metavision `PeriodicFrameGenerationAlgorithm` 生成事件帧
+- `AEDAT4` 使用项目内置 `EventFrameRenderer`，颜色与 Metavision SDK 调色板保持一致
 - 支持 Activity / Trail / STC / AntiFlicker 等 Metavision 去噪配置
+- 支持播放倍速、Palette、FPS 在播放过程中热更新，避免重新打开文件
+- 支持 ROI 裁剪、推理模式切换、预测结果按帧时间戳叠加显示
 - 前端与后端通过 ZeroMQ 通信
 - Windows 端负责 UI、相机与显示，WSL 端负责模型推理
+
+## 功能介绍
+
+### 输入源与回放
+
+- 实时 Metavision 相机：直接从设备读取事件流，支持硬件 ROI 尝试配置。
+- `.raw` 文件：使用 Metavision `EventsIterator` 读取事件，并按事件时间戳进行真实时间回放。
+- `.h5/.hdf5` 文件：自动识别事件字段，按统一事件格式转换后进行回放和推理。
+- `.aedat4` 文件：使用 `dv_processing` 读取事件批次，再转换为统一事件格式进行显示、去噪和推理。
+
+### 可视化
+
+- 统一支持 `Dark / Light / CoolWarm / Gray` 调色板。
+- `RAW / H5` 通过 Metavision 帧生成算法显示，`AEDAT4` 通过项目内置渲染器显示。
+- 播放过程中可以直接调整 Palette、FPS 和播放倍速，不需要重启相机或重新打开离线文件。
+- FPS 会影响显示帧切分和帧生成节奏，播放倍速只影响文件回放速度。
+
+### 去噪与 ROI
+
+- 去噪算法支持 `None / Activity / Trail / STC / AntiFlicker`。
+- 去噪作用在显示和推理之前，便于对比过滤前后的可视化效果和推理稳定性。
+- ROI 可用于限制显示、推理和归一化区域；实时 Metavision 设备会优先尝试硬件 ROI。
+
+### 推理与叠加显示
+
+- 支持 `center` 与 `ellipse` 两种预测模式。
+- Windows UI 负责事件采集、可视化和请求发送，WSL 后端负责 EventMamba 模型推理。
+- 推理结果携带事件时间戳，UI 按时间匹配图像帧后叠加绘制，降低结果和画面错位。
 
 ## 项目结构
 
@@ -34,6 +66,14 @@ UI_Event/
 │   ├── camera_service.py      # 相机与录制管理
 │   ├── inference_service.py   # WSL 推理服务管理
 │   ├── Camera.py              # 底层相机/离线流处理
+│   ├── camera_source_factory.py # 输入源创建与渲染器创建
+│   ├── camera_source_runner.py # 不同输入源的运行分发
+│   ├── event_frame_renderer.py # AEDAT4 事件帧渲染器
+│   ├── h5_replay.py           # H5 文件回放
+│   ├── h5_source.py           # H5 文件字段和分辨率解析
+│   ├── metavision_source.py   # RAW/实时 Metavision 输入处理
+│   ├── replay_clock.py        # 统一回放时钟
+│   ├── replay_speed.py        # 播放倍速热更新控制
 │   ├── NetworkThread.py       # ZMQ 请求响应线程
 │   ├── realtime_inference.py  # 模型推理封装
 │   ├── protocol.py            # 后端消息协议

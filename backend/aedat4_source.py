@@ -1,44 +1,40 @@
 import logging
-import queue
 import time
 
-import cv2
 import numpy as np
 
 from backend.aedat4_replay import (
-    init_aedat4_timing,
-    replay_sleep_s,
-    should_emit_frame,
-    should_reset_replay_clock,
     split_next_aedat4_nn_chunk,
 )
-from backend.event_processing import filter_events_by_roi
+from backend.event_processing import filter_events_by_roi, replace_oldest_nowait, to_event_cd
+from backend.replay_clock import ReplayClock, frame_interval_us
 
 LOGGER = logging.getLogger(__name__)
 
 
 def run_aedat4_replay_loop(
     reader,
-    visualizer,
-    event_store_factory,
+    frame_generator,
     fps,
     nn_interval_us,
     is_running,
     roi_getter,
-    image_callback,
     nn_queue,
+    noise_filter,
+    replay_factor=1.0,
+    replay_factor_getter=None,
+    fps_getter=None,
     sleep=time.sleep,
     now=time.perf_counter,
 ):
-    frame_buffer = event_store_factory()
-    frame_interval_us = int(1_000_000 / (fps if fps > 0 else 30))
-    next_frame_time = None
+    frame_interval = _active_frame_interval_us(fps, fps_getter)
+    frame_buffer = []
+    first_frame_emitted = False
 
     nn_buffer = []
     next_nn_time = None
 
-    start_real_time = now()
-    start_sensor_time = None
+    clock = None
 
     while is_running() and reader.isRunning():
         events = reader.getNextEventBatch()
@@ -47,86 +43,123 @@ def run_aedat4_replay_loop(
         if events.isEmpty():
             continue
 
-        frame_buffer.add(events)
         event_array = events.numpy()
+        frame_events = to_event_cd(event_array)
 
-        if start_sensor_time is None:
-            timing = init_aedat4_timing(
-                event_array["timestamp"][0],
-                frame_interval_us,
-                nn_interval_us,
-                now(),
+        if clock is None:
+            first_timestamp = int(frame_events["t"][0])
+            current_time = now()
+            active_replay_factor = replay_factor_getter() if replay_factor_getter is not None else replay_factor
+            clock = ReplayClock.start(first_timestamp, frame_interval, current_time, active_replay_factor)
+            next_nn_time = first_timestamp + nn_interval_us
+        else:
+            current_frame_start = clock.next_frame_time - clock.frame_interval_us
+            clock.reschedule_next_frame(_active_frame_interval_us(fps, fps_getter), current_frame_start)
+
+        display_events = filter_events_by_roi(frame_events, roi_getter())
+        display_events = noise_filter.apply(display_events)
+        if len(display_events) > 0:
+            if not first_frame_emitted:
+                frame_generator.process_events(np.ascontiguousarray(display_events))
+                first_frame_emitted = True
+                clock.reset_origin(display_events["t"][-1], now())
+            else:
+                frame_buffer.append(display_events)
+            nn_buffer.append(display_events)
+
+        if frame_events["t"][-1] >= clock.next_frame_time:
+            frame_buffer = _drain_frame_chunks(
+                frame_buffer,
+                clock,
+                is_running,
+                frame_generator,
+                sleep,
+                now,
+                replay_factor_getter,
+                fps,
+                fps_getter,
             )
-            start_sensor_time = timing["start_sensor_time"]
-            next_frame_time = timing["next_frame_time"]
-            next_nn_time = timing["next_nn_time"]
-            start_real_time = timing["start_real_time"]
 
-        roi_events = filter_events_by_roi(event_array, roi_getter())
-        if len(roi_events) > 0:
-            nn_buffer.append(roi_events)
-
-        if should_emit_frame(event_array, next_frame_time):
-            image_bgr = visualizer.generateImage(frame_buffer)
-            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-            if is_running():
-                image_callback(image_rgb.copy(), int(event_array["timestamp"][-1]))
-
-            frame_buffer = event_store_factory()
-            next_frame_time += frame_interval_us
-
-        if event_array["timestamp"][-1] >= next_nn_time:
-            nn_buffer, start_sensor_time, start_real_time, next_nn_time = _drain_nn_chunks(
+        if frame_events["t"][-1] >= next_nn_time:
+            nn_buffer, next_nn_time = _drain_nn_chunks(
                 nn_buffer,
                 next_nn_time,
                 nn_interval_us,
-                start_sensor_time,
-                start_real_time,
                 is_running,
                 nn_queue,
-                sleep,
-                now,
             )
 
-    while not nn_queue.empty() and is_running():
-        sleep(0.05)
+    if frame_buffer and is_running():
+        frame_generator.process_events(np.ascontiguousarray(np.concatenate(frame_buffer)))
+
+
+def _drain_frame_chunks(
+    frame_buffer,
+    clock,
+    is_running,
+    frame_generator,
+    sleep,
+    now,
+    replay_factor_getter=None,
+    fps=None,
+    fps_getter=None,
+):
+    if not frame_buffer:
+        clock.reschedule_next_frame(_active_frame_interval_us(fps, fps_getter), clock.next_frame_time)
+        return frame_buffer
+
+    buffer_events = np.concatenate(frame_buffer)
+    frame_chunk, buffer_events, time_field = split_next_aedat4_nn_chunk(buffer_events, clock.next_frame_time)
+    if time_field is None:
+        LOGGER.warning("AEDAT4 events do not contain a timestamp field")
+        clock.advance_frame()
+        return []
+
+    while frame_chunk is not None:
+        clock.sleep_until(
+            clock.next_frame_time,
+            sleep,
+            now,
+            reset_sensor_time=clock.next_frame_time,
+            replay_factor_getter=replay_factor_getter,
+            factor_reset_sensor_time=clock.next_frame_time - clock.frame_interval_us,
+        )
+
+        if len(frame_chunk) > 0 and is_running():
+            frame_generator.process_events(np.ascontiguousarray(frame_chunk))
+
+        clock.reschedule_next_frame(_active_frame_interval_us(fps, fps_getter), clock.next_frame_time)
+        frame_chunk, buffer_events, _ = split_next_aedat4_nn_chunk(buffer_events, clock.next_frame_time)
+
+    return [buffer_events] if len(buffer_events) > 0 else []
 
 
 def _drain_nn_chunks(
     nn_buffer,
     next_nn_time,
     nn_interval_us,
-    start_sensor_time,
-    start_real_time,
     is_running,
     nn_queue,
-    sleep,
-    now,
 ):
     if not nn_buffer:
-        return nn_buffer, start_sensor_time, start_real_time, next_nn_time + nn_interval_us
+        return nn_buffer, next_nn_time + nn_interval_us
 
     buffer_events = np.concatenate(nn_buffer)
     nn_chunk, buffer_events, time_field = split_next_aedat4_nn_chunk(buffer_events, next_nn_time)
     if time_field is None:
         LOGGER.warning("AEDAT4 events do not contain a timestamp field")
-        return [], start_sensor_time, start_real_time, next_nn_time + nn_interval_us
+        return [], next_nn_time + nn_interval_us
 
     while nn_chunk is not None:
         if len(nn_chunk) > 0 and is_running() and nn_queue is not None:
-            try:
-                nn_queue.put(nn_chunk, timeout=1.0)
-            except queue.Full:
-                LOGGER.warning("AEDAT4 playback is waiting for NNWorker")
-
-        sleep_time = replay_sleep_s(next_nn_time, start_sensor_time, start_real_time, now())
-        if sleep_time > 0.005:
-            sleep(sleep_time)
-        elif should_reset_replay_clock(sleep_time):
-            start_real_time = now()
-            start_sensor_time = next_nn_time
+            if not replace_oldest_nowait(nn_queue, nn_chunk):
+                LOGGER.warning("AEDAT4 playback dropped an NN chunk because the queue is unavailable")
 
         next_nn_time += nn_interval_us
         nn_chunk, buffer_events, _ = split_next_aedat4_nn_chunk(buffer_events, next_nn_time)
 
-    return [buffer_events] if len(buffer_events) > 0 else [], start_sensor_time, start_real_time, next_nn_time
+    return [buffer_events] if len(buffer_events) > 0 else [], next_nn_time
+
+
+def _active_frame_interval_us(fps, fps_getter=None):
+    return frame_interval_us(fps_getter() if fps_getter is not None else fps)

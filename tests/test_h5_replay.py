@@ -104,6 +104,103 @@ def test_run_h5_replay_loop_emits_frames_and_sleeps():
     assert sleeps == [pytest.approx(0.04), pytest.approx(0.02)]
 
 
+def test_run_h5_replay_loop_applies_replay_factor():
+    dataset = np.array(
+        [
+            (1, 1, 100000, 1),
+            (2, 2, 110000, 1),
+            (3, 3, 130000, 0),
+        ],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("timestamp", "<i8"), ("polarity", "i1")],
+    )
+    sleeps = []
+    current_time = [0.0]
+
+    def fake_sleep(duration):
+        sleeps.append(duration)
+        current_time[0] += duration
+
+    run_h5_replay_loop(
+        events_dataset=dataset,
+        dtype_names=dataset.dtype.names,
+        fps=50,
+        is_running=lambda: True,
+        handle_frame_events=lambda events: None,
+        now=lambda: current_time[0],
+        sleep=fake_sleep,
+        replay_factor=2.0,
+        step=2,
+    )
+
+    assert sleeps == [pytest.approx(0.02), pytest.approx(0.01)]
+
+
+def test_run_h5_replay_loop_updates_replay_factor_while_running():
+    dataset = np.array(
+        [
+            (1, 1, 100000, 1),
+            (2, 2, 110000, 1),
+            (3, 3, 130000, 0),
+        ],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("timestamp", "<i8"), ("polarity", "i1")],
+    )
+    replay_factor = [1.0]
+    sleeps = []
+    current_time = [0.0]
+
+    def fake_sleep(duration):
+        sleeps.append(duration)
+        current_time[0] += duration
+        replay_factor[0] = 2.0
+
+    run_h5_replay_loop(
+        events_dataset=dataset,
+        dtype_names=dataset.dtype.names,
+        fps=50,
+        is_running=lambda: True,
+        handle_frame_events=lambda events: None,
+        now=lambda: current_time[0],
+        sleep=fake_sleep,
+        replay_factor_getter=lambda: replay_factor[0],
+        step=2,
+    )
+
+    assert sleeps == [pytest.approx(0.04), pytest.approx(0.01)]
+
+
+def test_run_h5_replay_loop_updates_fps_while_running():
+    dataset = np.array(
+        [
+            (1, 1, 100000, 1),
+            (2, 2, 110000, 1),
+            (3, 3, 130000, 0),
+        ],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("timestamp", "<i8"), ("polarity", "i1")],
+    )
+    fps = [50]
+    sleeps = []
+    current_time = [0.0]
+
+    def fake_sleep(duration):
+        sleeps.append(duration)
+        current_time[0] += duration
+        fps[0] = 100
+
+    run_h5_replay_loop(
+        events_dataset=dataset,
+        dtype_names=dataset.dtype.names,
+        fps=50,
+        is_running=lambda: True,
+        handle_frame_events=lambda events: None,
+        now=lambda: current_time[0],
+        sleep=fake_sleep,
+        fps_getter=lambda: fps[0],
+        step=2,
+    )
+
+    assert sleeps == [pytest.approx(0.04), pytest.approx(0.01)]
+
+
 def test_run_h5_replay_loop_honors_stop_callback():
     dataset = np.array(
         [(1, 1, 100, 1), (2, 2, 200, 1)],

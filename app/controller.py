@@ -23,14 +23,15 @@ class AppController:
         self.backend.prediction_signal.connect(prediction_handler)
         self.backend.playback_finished_signal.connect(playback_finished_handler)
 
-    def sync_capture_settings(self, palette, fps):
-        self.settings.update_capture(palette, fps)
+    def sync_capture_settings(self, palette, fps, replay_factor=1.0):
+        self.settings.update_capture(palette, fps, replay_factor)
 
     def start_camera(self):
         self.backend.start_camera(
             self.settings.palette,
             self.settings.fps,
             self.settings.roi,
+            self.settings.replay_factor,
         )
 
     def restart_camera_if_running(self):
@@ -40,8 +41,15 @@ class AppController:
             self.settings.palette,
             self.settings.fps,
             self.settings.roi,
+            self.settings.replay_factor,
         )
         return True
+
+    def update_replay_factor(self):
+        self.backend.set_replay_factor(self.settings.replay_factor)
+
+    def update_display_settings(self):
+        self.backend.set_display_settings(self.settings.palette, self.settings.fps)
 
     def stop_camera(self):
         self.backend.stop_camera()

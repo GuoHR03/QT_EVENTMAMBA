@@ -41,25 +41,35 @@ class BackendAPI(QObject):
     def set_input_file(self, file_path):
         self.camera.set_input_file(file_path)
 
-    def start_camera(self, palette, fps, roi=None):
+    def start_camera(self, palette, fps, roi=None, replay_factor=1.0):
         self.camera.start(
             palette,
             fps,
             roi,
+            replay_factor,
             self.noise_filter_type,
             self.noise_filter_threshold_us,
         )
         self._enqueue_camera_config()
 
-    def restart_camera(self, palette=None, fps=None, roi=None):
+    def restart_camera(self, palette=None, fps=None, roi=None, replay_factor=None):
         self.camera.restart(
             palette,
             fps,
             roi,
+            replay_factor,
             self.noise_filter_type,
             self.noise_filter_threshold_us,
         )
         self._enqueue_camera_config()
+
+    def set_replay_factor(self, replay_factor):
+        self.camera.set_replay_factor(replay_factor)
+        LOGGER.info("Replay speed set to: %sx", replay_factor)
+
+    def set_display_settings(self, palette, fps):
+        self.camera.set_display_settings(palette, fps)
+        LOGGER.info("Display settings set to: palette=%s, fps=%s", palette, fps)
 
     def stop_camera(self):
         self.camera.stop()

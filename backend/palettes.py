@@ -1,3 +1,5 @@
+# Values mirror Metavision SDK ColorPalette definitions after RGB float colors
+# are converted with the SDK rule: uint8(channel * 255 + 0.5).
 AEDAT4_RGB_PALETTES = {
     "Dark": {
         "bg": (30, 37, 52),
