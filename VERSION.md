@@ -36,11 +36,11 @@
 - 去噪模块接入 AEDAT4 回放链路，RAW/H5/AEDAT4 均可在显示和推理前应用统一去噪。
 - seek 过程中不再重复输出 `[NoiseFilter] Disabled` 初始日志，降低日志窗口噪声。
 
-### 当前已知限制
+### v8 备份点已知限制
 
-- RAW 当前仍使用 `DEFAULT_NN_INTERVAL_MS` 作为 `EventsIterator(delta_t)`，因此推理事件窗口和 RAW 显示输入包仍存在耦合。
-- UI 的 FPS 会传入 `PeriodicFrameGenerationAlgorithm`，但 RAW 读取分块默认仍为 20ms；这可能导致与 Metavision Studio 在相同 30fps 参数下存在显示差异。
-- 下一步优化目标是将 RAW 显示窗口与推理窗口拆开：显示按 `fps / accumulation time`，推理继续按 `DEFAULT_NN_INTERVAL_MS`。
+- v8 备份点中，RAW 仍使用 `DEFAULT_NN_INTERVAL_MS` 作为 `EventsIterator(delta_t)`，因此推理事件窗口和 RAW 显示输入包仍存在耦合。
+- v8 备份点中，UI 的 FPS 会传入 `PeriodicFrameGenerationAlgorithm`，但 RAW 读取分块默认仍为 20ms；这可能导致与 Metavision Studio 在相同 30fps 参数下存在显示差异。
+- v9 已完成该优化：RAW 显示窗口按 `fps / accumulation time`，推理继续按 `DEFAULT_NN_INTERVAL_MS`。
 
 ### 测试
 
