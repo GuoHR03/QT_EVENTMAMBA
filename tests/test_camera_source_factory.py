@@ -5,6 +5,7 @@ from backend.camera_source_factory import (
     SOURCE_H5,
     SOURCE_METAVISION,
     classify_input_source,
+    create_metavision_source,
 )
 
 
@@ -72,3 +73,35 @@ def test_dynamic_metavision_frame_generator_rebuilds_renderer_on_display_update(
     assert created[1].palette_type == "Light"
     assert created[1].fps == 60
     assert created[1].events == ["after"]
+
+
+def test_metavision_source_uses_duration_hint_for_raw_seek(monkeypatch):
+    calls = {}
+
+    class FakeIterator:
+        def get_size(self):
+            return 480, 640
+
+    def fake_iterator(input_path, device, delta_t_us, replay_factor, replay_factor_getter=None, start_ts=0):
+        calls["input_path"] = input_path
+        calls["start_ts"] = start_ts
+        return FakeIterator()
+
+    monkeypatch.setattr("backend.camera_source_factory.create_metavision_iterator", fake_iterator)
+    monkeypatch.setattr("backend.camera_source_factory.create_metavision_frame_generator", lambda *args: object())
+
+    source = create_metavision_source(
+        input_path="recording.raw",
+        delta_t_us=20000,
+        replay_factor=1.0,
+        fps=30,
+        palette_type="Dark",
+        frame_callback=None,
+        seek_fraction=0.5,
+        duration_hint_us=123456,
+    )
+
+    assert calls["input_path"] == "recording.raw"
+    assert calls["start_ts"] == 60000
+    assert source.end_time_us == 123456
+    assert source.seek_time_us == 60000

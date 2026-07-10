@@ -74,6 +74,22 @@ def h5_event_dtype_names(events_dataset):
     return events_dataset.dtype.names or ()
 
 
+def h5_event_time_range(events_dataset, dtype_names=None):
+    total_events = len(events_dataset)
+    if total_events <= 0:
+        return 0, 0
+
+    time_key = _h5_time_key(dtype_names or h5_event_dtype_names(events_dataset))
+    if time_key is None:
+        return 0, 0
+
+    start_time = _h5_event_time_at(events_dataset, 0, time_key)
+    end_time = _h5_event_time_at(events_dataset, total_events - 1, time_key)
+    if start_time is None or end_time is None:
+        return 0, 0
+    return int(start_time), int(end_time)
+
+
 def h5_resolution(h5_file, events_dataset=None):
     width = _attr_int(h5_file.attrs, ("width", "sensor_width"), None)
     height = _attr_int(h5_file.attrs, ("height", "sensor_height"), None)
@@ -98,3 +114,15 @@ def _attr_int(attrs, names, default):
         if name in attrs:
             return int(attrs[name])
     return default
+
+
+def _h5_time_key(dtype_names):
+    names = set(dtype_names or ())
+    return _first_existing(names, ("t", "ts", "timestamp"))
+
+
+def _h5_event_time_at(events_dataset, index, time_key):
+    raw_event = events_dataset[index:index + 1]
+    if len(raw_event) == 0:
+        return None
+    return int(raw_event[time_key][0])

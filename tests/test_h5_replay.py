@@ -3,6 +3,7 @@ import pytest
 
 from backend.event_processing import EVENT_CD_DTYPE
 from backend.h5_replay import (
+    h5_find_start_index_for_time,
     h5_events_to_event_cd,
     h5_frame_interval_us,
     h5_replay_sleep_s,
@@ -36,6 +37,21 @@ def test_h5_events_to_event_cd_converts_dtype():
 
     assert converted.dtype == EVENT_CD_DTYPE
     assert converted.tolist() == [(1, 2, 1, 100), (3, 4, 0, 200)]
+
+
+def test_h5_find_start_index_for_time_uses_first_event_at_or_after_target():
+    dataset = np.array(
+        [
+            (1, 1, 100, 1),
+            (2, 2, 200, 1),
+            (3, 3, 500, 0),
+        ],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("timestamp", "<i8"), ("polarity", "i1")],
+    )
+
+    assert h5_find_start_index_for_time(dataset, "timestamp", 201) == 2
+    assert h5_find_start_index_for_time(dataset, "timestamp", 500) == 2
+    assert h5_find_start_index_for_time(dataset, "timestamp", 999) == 3
 
 
 def test_split_events_for_frame_without_boundary_keeps_batch():
@@ -219,3 +235,31 @@ def test_run_h5_replay_loop_honors_stop_callback():
     )
 
     assert emitted == []
+
+
+def test_run_h5_replay_loop_starts_from_target_time_and_reports_progress():
+    dataset = np.array(
+        [
+            (1, 1, 100000, 1),
+            (2, 2, 110000, 1),
+            (3, 3, 130000, 0),
+        ],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("timestamp", "<i8"), ("polarity", "i1")],
+    )
+    emitted = []
+    progress = []
+
+    run_h5_replay_loop(
+        events_dataset=dataset,
+        dtype_names=dataset.dtype.names,
+        fps=50,
+        is_running=lambda: True,
+        handle_frame_events=lambda events: emitted.append(events.copy()),
+        now=lambda: 0.0,
+        sleep=lambda _: None,
+        start_time_us=120000,
+        progress_callback=lambda timestamp: progress.append(timestamp),
+    )
+
+    assert [frame.tolist() for frame in emitted] == [[(3, 3, 0, 130000)]]
+    assert progress == [130000]

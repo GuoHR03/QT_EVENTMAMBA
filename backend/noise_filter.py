@@ -27,10 +27,11 @@ except Exception:
 
 
 class NoiseFilterPipeline:
-    def __init__(self, filter_type="none", threshold_us=10000, status_callback=None):
+    def __init__(self, filter_type="none", threshold_us=10000, status_callback=None, report_initial_status=True):
         self.filter_type = normalize_noise_filter_type(filter_type)
         self.threshold_us = max(1, int(threshold_us or 10000))
         self.status_callback = status_callback
+        self.report_initial_status = bool(report_initial_status)
         self.algorithm = None
         self.output = None
         self.warning_printed = False
@@ -41,24 +42,24 @@ class NoiseFilterPipeline:
 
     def initialize(self, width, height):
         if self.filter_type == "none":
-            self._report("[NoiseFilter] Disabled")
+            self._report_initial("[NoiseFilter] Disabled")
             return
 
         if _METAVISION_CV_IMPORT_ERROR is not None:
-            self._report(f"[NoiseFilter] Metavision CV unavailable: {_METAVISION_CV_IMPORT_ERROR}")
+            self._report_initial(f"[NoiseFilter] Metavision CV unavailable: {_METAVISION_CV_IMPORT_ERROR}")
             self.filter_type = "none"
             return
 
         try:
             self.algorithm = self._create_algorithm(width, height)
             self.output = self.algorithm.get_empty_output_buffer()
-            self._report(
+            self._report_initial(
                 "[NoiseFilter] Enabled "
                 f"{NOISE_FILTER_DISPLAY_NAMES[self.filter_type]} "
                 f"(threshold={self.threshold_us}us)"
             )
         except Exception as exc:
-            self._report(f"[NoiseFilter] Failed to initialize {self.filter_type}: {exc}")
+            self._report_initial(f"[NoiseFilter] Failed to initialize {self.filter_type}: {exc}")
             self.filter_type = "none"
             self.algorithm = None
             self.output = None
@@ -129,3 +130,7 @@ class NoiseFilterPipeline:
     def _report(self, message):
         if self.status_callback is not None:
             self.status_callback(message)
+
+    def _report_initial(self, message):
+        if self.report_initial_status:
+            self._report(message)

@@ -22,6 +22,7 @@ class CameraRunContext:
     noise_filter: object
     target_queue: object
     analysis_enabled: object
+    progress_callback: object = None
 
 
 def run_camera_source(source_type, source, context):
@@ -51,6 +52,8 @@ def _run_aedat4_source(source, context):
         replay_factor=context.replay_factor,
         replay_factor_getter=context.replay_factor_getter,
         fps_getter=context.fps_getter,
+        start_time_us=getattr(source, "seek_time_us", 0),
+        progress_callback=context.progress_callback,
     )
 
 
@@ -76,6 +79,8 @@ def _run_h5_source(source, context):
             replay_factor=context.replay_factor,
             replay_factor_getter=context.replay_factor_getter,
             fps_getter=context.fps_getter,
+            start_time_us=getattr(source, "seek_time_us", 0),
+            progress_callback=context.progress_callback,
         )
     finally:
         close_camera_source(source)
@@ -89,6 +94,7 @@ def _run_metavision_source(source, context):
         noise_filter=context.noise_filter,
         frame_generator=source.frame_generator,
         nn_queue=context.nn_queue,
+        progress_callback=context.progress_callback,
     )
 
 

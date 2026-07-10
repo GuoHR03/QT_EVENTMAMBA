@@ -44,7 +44,7 @@ class DynamicReplayEventsIterator:
         return self.iterator.get_current_time()
 
     def __iter__(self):
-        anchor_sensor_time = 0
+        anchor_sensor_time = int(self.start_ts or 0)
         anchor_real_time = self.now()
         replay_factor = normalize_replay_factor(self.replay_factor_getter())
 
@@ -74,12 +74,19 @@ class DynamicReplayEventsIterator:
             self.sleep(min(sleep_time, MAX_DYNAMIC_REPLAY_SLEEP_S))
 
 
-def create_metavision_iterator(input_path, device, delta_t_us, replay_factor, replay_factor_getter=None):
+def create_metavision_iterator(
+    input_path,
+    device,
+    delta_t_us,
+    replay_factor,
+    replay_factor_getter=None,
+    start_ts=0,
+):
     from metavision_core.event_io import EventsIterator
 
     if input_path:
         LOGGER.info("Using Metavision file replay mode")
-        base_iterator = EventsIterator(input_path=input_path, delta_t=delta_t_us)
+        base_iterator = EventsIterator(input_path=input_path, start_ts=int(start_ts or 0), delta_t=delta_t_us)
         return DynamicReplayEventsIterator(
             base_iterator,
             replay_factor=replay_factor,
@@ -118,12 +125,15 @@ def run_metavision_event_loop(
     noise_filter,
     frame_generator,
     nn_queue,
+    progress_callback=None,
 ):
     for events in iterator:
         if not is_running():
             break
         if len(events) == 0:
             continue
+        if progress_callback is not None:
+            progress_callback(int(events["t"][-1]))
 
         events = filter_events_by_roi(events, roi_getter())
         events = noise_filter.apply(events)

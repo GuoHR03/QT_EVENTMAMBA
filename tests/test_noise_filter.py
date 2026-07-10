@@ -39,6 +39,15 @@ def test_disabled_noise_filter_reports_and_passes_events_through():
     assert not pipeline.enabled
 
 
+def test_disabled_noise_filter_can_suppress_initial_status():
+    messages = []
+    pipeline = NoiseFilterPipeline("none", status_callback=messages.append, report_initial_status=False)
+
+    pipeline.initialize(640, 480)
+
+    assert messages == []
+
+
 def test_noise_filter_apply_converts_common_event_fields():
     pipeline = NoiseFilterPipeline("activity")
     algorithm = FakeAlgorithm()

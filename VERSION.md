@@ -1,5 +1,41 @@
 # Version History
 
+## v8
+
+日期：2026-07-10
+
+### 播放进度条与拖拽回放
+
+- 主界面新增离线文件播放进度条，显示当前播放时间和总时长。
+- 支持拖拽进度条进行回放定位，拖拽释放后由后端重新按目标时间点启动文件回放。
+- RAW 文件优先读取同目录 `.raw.tmp_index` 获取总时长；缺失时再回退到 `*_info.json` 或后台扫描。
+- 修复 RAW 拖拽后进度条回到旧位置、拖拽无效果的问题。
+- RAW seek 时会基于目标时间戳创建 `EventsIterator(start_ts=...)`，避免从文件开头重新等待。
+
+### 回放参数热更新
+
+- 播放倍速支持 `0.25x / 0.5x / 1x / 2x / 4x`，播放过程中修改不再重新打开文件。
+- Palette 和 FPS 支持运行中热更新，RAW/H5 通过动态 Metavision frame generator 替换内部帧生成器。
+- H5/AEDAT4 的帧切分会读取当前 FPS，后续帧按新的帧间隔继续生成。
+
+### 可视化一致性与去噪
+
+- RAW/H5/AEDAT4 统一支持 `Dark / Light / CoolWarm / Gray` 调色板。
+- AEDAT4 内置 `EventFrameRenderer` 的颜色值按 Metavision SDK 调色板规则微调，降低与 Metavision 显示风格的差异。
+- 去噪模块接入 AEDAT4 回放链路，RAW/H5/AEDAT4 均可在显示和推理前应用统一去噪。
+- seek 过程中不再重复输出 `[NoiseFilter] Disabled` 初始日志，降低日志窗口噪声。
+
+### 当前已知限制
+
+- RAW 当前仍使用 `DEFAULT_NN_INTERVAL_MS` 作为 `EventsIterator(delta_t)`，因此推理事件窗口和 RAW 显示输入包仍存在耦合。
+- UI 的 FPS 会传入 `PeriodicFrameGenerationAlgorithm`，但 RAW 读取分块默认仍为 20ms；这可能导致与 Metavision Studio 在相同 30fps 参数下存在显示差异。
+- 下一步优化目标是将 RAW 显示窗口与推理窗口拆开：显示按 `fps / accumulation time`，推理继续按 `DEFAULT_NN_INTERVAL_MS`。
+
+### 测试
+
+- 新增 RAW 元数据读取、RAW seek、H5 seek、AEDAT4 seek、去噪日志抑制等单元测试。
+- 当前测试覆盖提升到 `124` 项。
+
 ## v7
 
 日期：2026-07-05

@@ -11,6 +11,8 @@
 - `AEDAT4` 使用项目内置 `EventFrameRenderer`，颜色与 Metavision SDK 调色板保持一致
 - 支持 Activity / Trail / STC / AntiFlicker 等 Metavision 去噪配置
 - 支持播放倍速、Palette、FPS 在播放过程中热更新，避免重新打开文件
+- 支持离线文件播放进度条、总时长显示和拖拽定位回放
+- RAW 文件优先使用 `.raw.tmp_index` 辅助获取总时长，提升进度条可用性
 - 支持 ROI 裁剪、推理模式切换、预测结果按帧时间戳叠加显示
 - 前端与后端通过 ZeroMQ 通信
 - Windows 端负责 UI、相机与显示，WSL 端负责模型推理
@@ -23,6 +25,7 @@
 - `.raw` 文件：使用 Metavision `EventsIterator` 读取事件，并按事件时间戳进行真实时间回放。
 - `.h5/.hdf5` 文件：自动识别事件字段，按统一事件格式转换后进行回放和推理。
 - `.aedat4` 文件：使用 `dv_processing` 读取事件批次，再转换为统一事件格式进行显示、去噪和推理。
+- 离线回放支持进度条显示当前时间/总时长，并可拖拽到目标位置继续播放。
 
 ### 可视化
 
@@ -30,6 +33,7 @@
 - `RAW / H5` 通过 Metavision 帧生成算法显示，`AEDAT4` 通过项目内置渲染器显示。
 - 播放过程中可以直接调整 Palette、FPS 和播放倍速，不需要重启相机或重新打开离线文件。
 - FPS 会影响显示帧切分和帧生成节奏，播放倍速只影响文件回放速度。
+- 当前 RAW 路径中，`EventsIterator(delta_t)` 仍使用推理窗口 `DEFAULT_NN_INTERVAL_MS`，显示输入包和推理事件包尚未完全拆分。
 
 ### 去噪与 ROI
 
@@ -135,3 +139,4 @@ checkpoint/
 - `eventmamba_backend.log` 是运行日志，可以删除
 - 主程序不再依赖训练脚本，训练/实验脚本不应混入主运行链路
 - 源码和文档统一使用 UTF-8 编码；如果 PowerShell 显示中文乱码，请用 `Get-Content -Encoding UTF8` 查看
+- 当前备份版本的已知优化点：RAW 显示窗口与推理窗口仍存在耦合，后续会将 RAW 显示按 `fps / accumulation time` 驱动，推理继续按 `DEFAULT_NN_INTERVAL_MS` 切片。

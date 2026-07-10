@@ -17,11 +17,13 @@ class AppController:
     def is_inference_running(self):
         return self.backend.is_inference_running()
 
-    def connect_view(self, image_handler, status_handler, prediction_handler, playback_finished_handler):
+    def connect_view(self, image_handler, status_handler, prediction_handler, playback_finished_handler, progress_handler=None):
         self.backend.image_signal.connect(image_handler)
         self.backend.camera_status_signal.connect(status_handler)
         self.backend.prediction_signal.connect(prediction_handler)
         self.backend.playback_finished_signal.connect(playback_finished_handler)
+        if progress_handler is not None:
+            self.backend.playback_progress_signal.connect(progress_handler)
 
     def sync_capture_settings(self, palette, fps, replay_factor=1.0):
         self.settings.update_capture(palette, fps, replay_factor)
@@ -53,6 +55,9 @@ class AppController:
 
     def stop_camera(self):
         self.backend.stop_camera()
+
+    def seek_playback(self, seek_fraction):
+        self.backend.seek_playback(seek_fraction)
 
     def start_recording(self):
         self.backend.start_recording()

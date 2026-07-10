@@ -16,11 +16,13 @@ def run_h5_replay_loop(
     replay_factor=1.0,
     replay_factor_getter=None,
     fps_getter=None,
+    start_time_us=0,
+    progress_callback=None,
     step=5000,
 ):
     total_events = len(events_dataset)
-    current_idx = 0
     time_key, pol_key = select_h5_event_fields(dtype_names)
+    current_idx = h5_find_start_index_for_time(events_dataset, time_key, start_time_us)
     frame_interval = _active_frame_interval_us(fps, fps_getter)
     clock = None
 
@@ -57,6 +59,8 @@ def run_h5_replay_loop(
         frame_events = np.concatenate(events_for_this_frame)
         if len(frame_events) > 0:
             handle_frame_events(frame_events)
+            if progress_callback is not None:
+                progress_callback(int(frame_events["t"][-1]))
 
         current_frame_boundary = clock.next_frame_time
         clock.reschedule_next_frame(_active_frame_interval_us(fps, fps_getter), current_frame_boundary)
@@ -97,6 +101,33 @@ def h5_events_to_event_cd(raw_events, time_key, polarity_key):
     return events
 
 
+def h5_find_start_index_for_time(events_dataset, time_key, start_time_us):
+    total_events = len(events_dataset)
+    if total_events <= 0 or start_time_us <= 0:
+        return 0
+
+    first_time = _h5_event_time_at(events_dataset, 0, time_key)
+    if first_time is None or start_time_us <= first_time:
+        return 0
+
+    last_time = _h5_event_time_at(events_dataset, total_events - 1, time_key)
+    if last_time is None:
+        return 0
+    if start_time_us > last_time:
+        return total_events
+
+    left = 0
+    right = total_events
+    while left < right:
+        mid = (left + right) // 2
+        timestamp = _h5_event_time_at(events_dataset, mid, time_key)
+        if timestamp is None or timestamp < start_time_us:
+            left = mid + 1
+        else:
+            right = mid
+    return left
+
+
 def split_events_for_frame(events, next_frame_target_time):
     if len(events) == 0:
         return events, events, False
@@ -126,3 +157,10 @@ def _first_existing(names, candidates):
         if candidate in names:
             return candidate
     return None
+
+
+def _h5_event_time_at(events_dataset, index, time_key):
+    raw_event = events_dataset[index:index + 1]
+    if len(raw_event) == 0:
+        return None
+    return int(raw_event[time_key][0])

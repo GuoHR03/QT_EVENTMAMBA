@@ -49,6 +49,9 @@ class CameraThread(QThread):
         replay_factor=DEFAULT_REPLAY_FACTOR,
         noise_filter_type="none",
         noise_filter_threshold_us=DEFAULT_NOISE_FILTER_THRESHOLD_US,
+        seek_fraction=0.0,
+        duration_hint_us=0,
+        report_noise_filter_status=True,
     ):
         super().__init__()
         self.is_running = True
@@ -61,6 +64,9 @@ class CameraThread(QThread):
         self.fps = normalize_fps(fps)
         self.nn_interval_us = int(nn_interval_ms * 1000)
         self.replay_factor = normalize_replay_factor(replay_factor)
+        self.seek_fraction = _clamp_seek_fraction(seek_fraction)
+        self.duration_hint_us = max(0, int(duration_hint_us or 0))
+        self.report_noise_filter_status = bool(report_noise_filter_status)
         self.replay_speed_controller = ReplaySpeedController(self.replay_factor)
         self.width = DEFAULT_SENSOR_WIDTH
         self.height = DEFAULT_SENSOR_HEIGHT
@@ -70,9 +76,12 @@ class CameraThread(QThread):
             self.noise_filter_type,
             self.noise_filter_threshold_us,
             status_callback=self._report_status,
+            report_initial_status=self.report_noise_filter_status,
         )
         self._last_frame_emit_time = None
         self._frame_emit_interval_s = 1.0 / self.fps
+        self.playback_start_time_us = 0
+        self.playback_end_time_us = 0
 
         self.source_type = classify_input_source(self.input_path)
         self.is_aedat4 = self.source_type == SOURCE_AEDAT4
@@ -108,6 +117,7 @@ class CameraThread(QThread):
                 palette_type,
                 fps=self.fps,
                 frame_callback=self._on_cd_frame_cb,
+                seek_fraction=self.seek_fraction,
             )
             source = self.source
             self.device = source.device
@@ -118,7 +128,13 @@ class CameraThread(QThread):
             self._set_roi(self.requested_roi)
 
         elif self.is_h5:
-            self.source = create_h5_source(self.input_path, self.fps, palette_type, self._on_cd_frame_cb)
+            self.source = create_h5_source(
+                self.input_path,
+                self.fps,
+                palette_type,
+                self._on_cd_frame_cb,
+                seek_fraction=self.seek_fraction,
+            )
             source = self.source
             self.device = source.device
             self.h5_file = source.file
@@ -142,6 +158,8 @@ class CameraThread(QThread):
                 hardware_roi=self._roi_tuple(),
                 status_callback=self._report_status,
                 replay_factor_getter=self.replay_speed_controller.get,
+                seek_fraction=self.seek_fraction,
+                duration_hint_us=self.duration_hint_us,
             )
             source = self.source
             if source is None:
@@ -152,6 +170,8 @@ class CameraThread(QThread):
             self.width = source.width
             self.height = source.height
             self._set_roi(self.requested_roi)
+
+        self._set_playback_range(self.source)
 
     def _start_workers(self, palette_type):
         self.nn_worker = InferencePayloadWorker(
@@ -208,6 +228,7 @@ class CameraThread(QThread):
                 noise_filter=self.noise_filter,
                 target_queue=self.target_queue,
                 analysis_enabled=lambda: self.analysis_enabled,
+                progress_callback=self._emit_playback_progress,
             ),
         )
 
@@ -252,6 +273,21 @@ class CameraThread(QThread):
             frame_generator.set_display_settings(self.palette_type, self.fps)
         LOGGER.info("Display settings updated: palette=%s, fps=%s", self.palette_type, self.fps)
 
+    def _set_playback_range(self, source):
+        self.playback_start_time_us = int(getattr(source, "start_time_us", 0) or 0)
+        self.playback_end_time_us = int(getattr(source, "end_time_us", 0) or 0)
+        seek_time_us = int(getattr(source, "seek_time_us", self.playback_start_time_us) or 0)
+        self._emit_playback_progress(seek_time_us)
+
+    def _emit_playback_progress(self, sensor_timestamp_us):
+        total = self.playback_end_time_us - self.playback_start_time_us
+        if total <= 0:
+            self.progress_signal.emit(max(0, int(sensor_timestamp_us or 0)), 0)
+            return
+        current = int(sensor_timestamp_us) - self.playback_start_time_us
+        current = max(0, min(total, current))
+        self.progress_signal.emit(current, total)
+
     def start_recording(self):
         self.is_recording = self.recorder.start(self.device)
 
@@ -262,3 +298,12 @@ class CameraThread(QThread):
     image_signal = pyqtSignal(object, int)
     status_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
+    progress_signal = pyqtSignal(int, int)
+
+
+def _clamp_seek_fraction(value):
+    try:
+        fraction = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, fraction))

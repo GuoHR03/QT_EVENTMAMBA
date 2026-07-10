@@ -21,11 +21,11 @@ class FrameGenerator:
 
 
 class FakeMetavisionIterator:
-    start_ts = 0
     delta_t = 20000
 
-    def __init__(self, timestamps):
+    def __init__(self, timestamps, start_ts=0):
         self.timestamps = timestamps
+        self.start_ts = start_ts
         self.current_time = 0
 
     def __iter__(self):
@@ -63,6 +63,26 @@ def test_run_metavision_event_loop_filters_roi_and_replaces_queue():
     assert frame_generator.frames[0].tolist() == queued.tolist()
 
 
+def test_run_metavision_event_loop_reports_progress_before_filters():
+    events = np.array(
+        [(1, 1, 1, 100), (2, 2, 0, 200)],
+        dtype=EVENT_CD_DTYPE,
+    )
+    progress = []
+
+    run_metavision_event_loop(
+        iterator=[events],
+        is_running=lambda: True,
+        roi_getter=lambda: (99, 99, 1, 1),
+        noise_filter=PassthroughFilter(),
+        frame_generator=FrameGenerator(),
+        nn_queue=queue.Queue(),
+        progress_callback=lambda timestamp: progress.append(timestamp),
+    )
+
+    assert progress == [200]
+
+
 def test_metavision_replay_factor_converts_speed_to_time_scale():
     assert metavision_replay_factor(4.0) == pytest.approx(0.25)
     assert metavision_replay_factor(0.25) == pytest.approx(4.0)
@@ -87,6 +107,26 @@ def test_dynamic_replay_iterator_applies_speed_factor():
     list(iterator)
 
     assert sleeps == [pytest.approx(0.01), pytest.approx(0.01)]
+
+
+def test_dynamic_replay_iterator_anchors_sleep_to_start_ts_after_seek():
+    current_time = [0.0]
+    sleeps = []
+
+    def fake_sleep(duration):
+        sleeps.append(duration)
+        current_time[0] += duration
+
+    iterator = DynamicReplayEventsIterator(
+        FakeMetavisionIterator([4020000], start_ts=4000000),
+        replay_factor_getter=lambda: 1.0,
+        sleep=fake_sleep,
+        now=lambda: current_time[0],
+    )
+
+    list(iterator)
+
+    assert sleeps == [pytest.approx(0.02)]
 
 
 def test_dynamic_replay_iterator_reanchors_when_speed_changes_during_sleep():

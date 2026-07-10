@@ -4,8 +4,9 @@ from threading import Lock
 
 from backend.event_frame_renderer import EventFrameRenderer
 from backend.metavision_source import apply_hardware_roi, create_metavision_iterator
-from backend.h5_source import h5_event_dtype_names, h5_resolution, open_h5_events
+from backend.h5_source import h5_event_dtype_names, h5_event_time_range, h5_resolution, open_h5_events
 from backend.palettes import metavision_palette
+from backend.raw_metadata import raw_duration_from_sidecar
 from backend.replay_clock import normalize_fps
 from backend.settings import DEFAULT_SENSOR_HEIGHT, DEFAULT_SENSOR_WIDTH
 
@@ -22,6 +23,9 @@ class Aedat4Source:
     frame_generator: object
     width: int
     height: int
+    start_time_us: int = 0
+    end_time_us: int = 0
+    seek_time_us: int = 0
     device: object = None
 
 
@@ -33,6 +37,9 @@ class H5Source:
     frame_generator: object
     width: int
     height: int
+    start_time_us: int = 0
+    end_time_us: int = 0
+    seek_time_us: int = 0
     device: object = None
 
 
@@ -43,6 +50,9 @@ class MetavisionSource:
     frame_generator: object
     width: int
     height: int
+    start_time_us: int = 0
+    end_time_us: int = 0
+    seek_time_us: int = 0
 
 
 def classify_input_source(input_path):
@@ -54,11 +64,13 @@ def classify_input_source(input_path):
     return SOURCE_METAVISION
 
 
-def create_aedat4_source(input_path, palette_type, fps=None, frame_callback=None):
+def create_aedat4_source(input_path, palette_type, fps=None, frame_callback=None, seek_fraction=0.0):
     import dv_processing as dv
 
     reader = dv.io.MonoCameraRecording(input_path)
     width, height = _aedat4_resolution(reader)
+    start_time_us, end_time_us = _aedat4_time_range(reader)
+    seek_time_us = _seek_time_from_fraction(start_time_us, end_time_us, seek_fraction)
     frame_generator = EventFrameRenderer(width, height, palette_type, frame_callback)
 
     return Aedat4Source(
@@ -66,23 +78,32 @@ def create_aedat4_source(input_path, palette_type, fps=None, frame_callback=None
         frame_generator=frame_generator,
         width=width,
         height=height,
+        start_time_us=start_time_us,
+        end_time_us=end_time_us,
+        seek_time_us=seek_time_us,
     )
 
 
-def create_h5_source(input_path, fps, palette_type, frame_callback):
+def create_h5_source(input_path, fps, palette_type, frame_callback, seek_fraction=0.0):
     import h5py
 
     h5_file = h5py.File(input_path, "r")
     events_dataset = open_h5_events(h5_file)
+    dtype_names = h5_event_dtype_names(events_dataset)
     width, height = h5_resolution(h5_file, events_dataset)
+    start_time_us, end_time_us = h5_event_time_range(events_dataset, dtype_names)
+    seek_time_us = _seek_time_from_fraction(start_time_us, end_time_us, seek_fraction)
     frame_generator = create_metavision_frame_generator(width, height, fps, palette_type, frame_callback)
     return H5Source(
         file=h5_file,
         events_dataset=events_dataset,
-        dtype_names=h5_event_dtype_names(events_dataset),
+        dtype_names=dtype_names,
         frame_generator=frame_generator,
         width=width,
         height=height,
+        start_time_us=start_time_us,
+        end_time_us=end_time_us,
+        seek_time_us=seek_time_us,
     )
 
 
@@ -96,10 +117,27 @@ def create_metavision_source(
     hardware_roi=None,
     status_callback=None,
     replay_factor_getter=None,
+    seek_fraction=0.0,
+    duration_hint_us=0,
 ):
     device = None
+    start_time_us = 0
+    end_time_us = 0
+    seek_time_us = 0
     if input_path:
-        iterator = create_metavision_iterator(input_path, device, delta_t_us, replay_factor, replay_factor_getter)
+        end_time_us = raw_duration_from_sidecar(input_path) or int(duration_hint_us or 0)
+        seek_time_us = _align_time_to_delta_t(
+            _seek_time_from_fraction(start_time_us, end_time_us, seek_fraction),
+            delta_t_us,
+        )
+        iterator = create_metavision_iterator(
+            input_path,
+            device,
+            delta_t_us,
+            replay_factor,
+            replay_factor_getter,
+            start_ts=seek_time_us,
+        )
     else:
         from metavision_core.event_io.raw_reader import initiate_device
 
@@ -130,6 +168,9 @@ def create_metavision_source(
         frame_generator=frame_generator,
         width=width,
         height=height,
+        start_time_us=start_time_us,
+        end_time_us=end_time_us,
+        seek_time_us=seek_time_us,
     )
 
 
@@ -199,3 +240,95 @@ def _aedat4_resolution(reader):
         return int(resolution.width), int(resolution.height)
     except Exception:
         return DEFAULT_SENSOR_WIDTH, DEFAULT_SENSOR_HEIGHT
+
+
+def _aedat4_time_range(reader):
+    candidates = (
+        ("getTimeRange", ()),
+        ("getTimeRangeUs", ()),
+        ("getTimestampRange", ()),
+    )
+    for method_name, args in candidates:
+        method = getattr(reader, method_name, None)
+        if method is None:
+            continue
+        try:
+            parsed = _parse_time_range(method(*args))
+        except Exception:
+            continue
+        if parsed is not None:
+            return parsed
+
+    start_time = _call_first_int(reader, ("getStartTime", "getStartTimeUs", "getFirstTimestamp"))
+    end_time = _call_first_int(reader, ("getEndTime", "getEndTimeUs", "getLastTimestamp"))
+    duration = _call_first_int(reader, ("getDuration", "getDurationUs"))
+    if start_time is not None and end_time is not None:
+        return start_time, end_time
+    if start_time is not None and duration is not None:
+        return start_time, start_time + duration
+    if duration is not None:
+        return 0, duration
+    return 0, 0
+
+
+def _parse_time_range(value):
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)) and len(value) >= 2:
+        return int(value[0]), int(value[1])
+    start = _read_int_attr(value, ("start", "begin", "first", "min"))
+    end = _read_int_attr(value, ("end", "last", "max"))
+    if start is not None and end is not None:
+        return start, end
+    return None
+
+
+def _call_first_int(source, names):
+    for name in names:
+        method = getattr(source, name, None)
+        if method is None:
+            continue
+        try:
+            return int(method())
+        except Exception:
+            continue
+    return None
+
+
+def _read_int_attr(source, names):
+    for name in names:
+        if not hasattr(source, name):
+            continue
+        value = getattr(source, name)
+        if callable(value):
+            try:
+                value = value()
+            except Exception:
+                continue
+        try:
+            return int(value)
+        except Exception:
+            continue
+    return None
+
+
+def _seek_time_from_fraction(start_time_us, end_time_us, seek_fraction):
+    start_time_us = int(start_time_us or 0)
+    end_time_us = int(end_time_us or 0)
+    if end_time_us <= start_time_us:
+        return start_time_us
+    return start_time_us + int((end_time_us - start_time_us) * _clamp_fraction(seek_fraction))
+
+
+def _align_time_to_delta_t(timestamp_us, delta_t_us):
+    timestamp_us = max(0, int(timestamp_us or 0))
+    delta_t_us = max(1, int(delta_t_us or 1))
+    return (timestamp_us // delta_t_us) * delta_t_us
+
+
+def _clamp_fraction(value):
+    try:
+        fraction = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, fraction))

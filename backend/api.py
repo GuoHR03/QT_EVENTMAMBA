@@ -14,6 +14,7 @@ class BackendAPI(QObject):
     camera_status_signal = pyqtSignal(str)
     prediction_signal = pyqtSignal(object, int)
     playback_finished_signal = pyqtSignal()
+    playback_progress_signal = pyqtSignal(int, int)
 
     def __init__(self):
         super().__init__()
@@ -23,6 +24,7 @@ class BackendAPI(QObject):
             self.image_signal,
             self.camera_status_signal,
             self.playback_finished_signal,
+            self.playback_progress_signal,
         )
         self.inference = InferenceService(self.camera_queue, self.prediction_signal)
         self.prediction_mode = "center"
@@ -63,6 +65,16 @@ class BackendAPI(QObject):
         )
         self._enqueue_camera_config()
 
+    def seek_playback(self, seek_fraction):
+        if not self.camera.is_running():
+            return
+        self.camera.seek(
+            seek_fraction,
+            self.noise_filter_type,
+            self.noise_filter_threshold_us,
+        )
+        self._enqueue_camera_config()
+
     def set_replay_factor(self, replay_factor):
         self.camera.set_replay_factor(replay_factor)
         LOGGER.info("Replay speed set to: %sx", replay_factor)
@@ -72,7 +84,7 @@ class BackendAPI(QObject):
         LOGGER.info("Display settings set to: palette=%s, fps=%s", palette, fps)
 
     def stop_camera(self):
-        self.camera.stop()
+        self.camera.stop(emit_finished=False)
 
     def update_camera_roi(self, roi):
         if self.camera.is_running():

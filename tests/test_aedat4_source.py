@@ -153,3 +153,34 @@ def test_aedat4_replay_replaces_full_nn_queue_without_blocking():
     queued = nn_queue.get_nowait()
     assert isinstance(queued, np.ndarray)
     assert queued.dtype == EVENT_CD_DTYPE
+
+
+def test_aedat4_replay_skips_events_before_start_time_and_reports_progress():
+    first = np.array(
+        [(1, 2, 1, 100), (3, 4, 0, 40000)],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("polarity", "i1"), ("timestamp", "<i8")],
+    )
+    second = np.array(
+        [(5, 6, 1, 50000), (7, 8, 0, 80000)],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("polarity", "i1"), ("timestamp", "<i8")],
+    )
+    frame_generator = FakeFrameGenerator()
+    progress = []
+
+    run_aedat4_replay_loop(
+        reader=FakeReader([FakeEventBatch(first), FakeEventBatch(second)]),
+        frame_generator=frame_generator,
+        fps=30,
+        nn_interval_us=100000,
+        is_running=lambda: True,
+        roi_getter=lambda: None,
+        nn_queue=queue.Queue(),
+        noise_filter=PassthroughFilter(),
+        sleep=lambda _: None,
+        now=lambda: 0.0,
+        start_time_us=45000,
+        progress_callback=lambda timestamp: progress.append(timestamp),
+    )
+
+    assert frame_generator.frames[0].tolist() == [(5, 6, 1, 50000), (7, 8, 0, 80000)]
+    assert progress == [80000]

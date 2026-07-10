@@ -111,6 +111,38 @@ QLineEdit:focus {
     border-color: #2563eb;
 }
 
+QLabel#playback_time_label {
+    background: transparent;
+    border: none;
+    color: #526174;
+    font-family: Consolas, "Microsoft YaHei", monospace;
+    font-size: 12px;
+}
+
+QSlider#playback_progress_slider::groove:horizontal {
+    background: #d8e0ea;
+    border-radius: 3px;
+    height: 6px;
+}
+
+QSlider#playback_progress_slider::sub-page:horizontal {
+    background: #2563eb;
+    border-radius: 3px;
+}
+
+QSlider#playback_progress_slider::handle:horizontal {
+    background: #ffffff;
+    border: 1px solid #1d4ed8;
+    border-radius: 6px;
+    height: 14px;
+    width: 14px;
+    margin: -5px 0;
+}
+
+QSlider#playback_progress_slider:disabled::sub-page:horizontal {
+    background: #94a3b8;
+}
+
 QWidget#ChooseWindowForm QGroupBox {
     background: #ffffff;
 }

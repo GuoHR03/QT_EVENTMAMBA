@@ -24,6 +24,8 @@ def run_aedat4_replay_loop(
     replay_factor=1.0,
     replay_factor_getter=None,
     fps_getter=None,
+    start_time_us=0,
+    progress_callback=None,
     sleep=time.sleep,
     now=time.perf_counter,
 ):
@@ -45,6 +47,16 @@ def run_aedat4_replay_loop(
 
         event_array = events.numpy()
         frame_events = to_event_cd(event_array)
+        if len(frame_events) == 0:
+            continue
+        if start_time_us and int(frame_events["t"][-1]) < int(start_time_us):
+            continue
+        if start_time_us and int(frame_events["t"][0]) < int(start_time_us):
+            frame_events = frame_events[frame_events["t"] >= int(start_time_us)]
+            if len(frame_events) == 0:
+                continue
+        if progress_callback is not None:
+            progress_callback(int(frame_events["t"][-1]))
 
         if clock is None:
             first_timestamp = int(frame_events["t"][0])
