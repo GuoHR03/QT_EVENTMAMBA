@@ -33,7 +33,7 @@
 - `RAW / H5` 通过 Metavision 帧生成算法显示，`AEDAT4` 通过项目内置渲染器显示。
 - 播放过程中可以直接调整 Palette、FPS 和播放倍速，不需要重启相机或重新打开离线文件。
 - FPS 会影响显示帧切分和帧生成节奏，播放倍速只影响文件回放速度。
-- 当前 RAW 路径中，`EventsIterator(delta_t)` 仍使用推理窗口 `DEFAULT_NN_INTERVAL_MS`，显示输入包和推理事件包尚未完全拆分。
+- RAW 路径中，显示输入包按 `fps` 对应的帧间隔读取，推理事件包继续按 `DEFAULT_NN_INTERVAL_MS` 独立切片。
 
 ### 去噪与 ROI
 
@@ -139,4 +139,4 @@ checkpoint/
 - `eventmamba_backend.log` 是运行日志，可以删除
 - 主程序不再依赖训练脚本，训练/实验脚本不应混入主运行链路
 - 源码和文档统一使用 UTF-8 编码；如果 PowerShell 显示中文乱码，请用 `Get-Content -Encoding UTF8` 查看
-- 当前备份版本的已知优化点：RAW 显示窗口与推理窗口仍存在耦合，后续会将 RAW 显示按 `fps / accumulation time` 驱动，推理继续按 `DEFAULT_NN_INTERVAL_MS` 切片。
+- 当前 RAW 显示窗口与推理窗口已经拆分：显示按 `fps / accumulation time` 驱动，推理继续按 `DEFAULT_NN_INTERVAL_MS` 切片。

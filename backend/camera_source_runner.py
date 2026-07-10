@@ -94,6 +94,7 @@ def _run_metavision_source(source, context):
         noise_filter=context.noise_filter,
         frame_generator=source.frame_generator,
         nn_queue=context.nn_queue,
+        nn_interval_us=context.nn_interval_us,
         progress_callback=context.progress_callback,
     )
 

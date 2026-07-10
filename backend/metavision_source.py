@@ -1,7 +1,9 @@
 import logging
 import time
 
-from backend.event_processing import filter_events_by_roi, replace_oldest_nowait
+import numpy as np
+
+from backend.event_processing import event_time_field, filter_events_by_roi, replace_oldest_nowait
 from backend.replay_speed import normalize_replay_factor
 
 LOGGER = logging.getLogger(__name__)
@@ -125,8 +127,11 @@ def run_metavision_event_loop(
     noise_filter,
     frame_generator,
     nn_queue,
+    nn_interval_us=None,
     progress_callback=None,
 ):
+    nn_slicer = _InferenceEventSlicer(nn_interval_us) if nn_interval_us is not None else None
+
     for events in iterator:
         if not is_running():
             break
@@ -141,7 +146,50 @@ def run_metavision_event_loop(
             continue
 
         frame_generator.process_events(events)
-        replace_oldest_nowait(nn_queue, events)
+        if nn_slicer is None:
+            replace_oldest_nowait(nn_queue, events)
+        else:
+            for nn_events in nn_slicer.consume(events):
+                replace_oldest_nowait(nn_queue, nn_events)
+
+
+class _InferenceEventSlicer:
+    def __init__(self, interval_us):
+        self.interval_us = max(1, int(interval_us or 1))
+        self.next_boundary_us = None
+        self.buffer = None
+
+    def consume(self, events):
+        if events is None or len(events) == 0:
+            return []
+
+        time_field = event_time_field(events)
+        if time_field is None:
+            return [events]
+
+        if self.next_boundary_us is None:
+            self.next_boundary_us = int(events[time_field][0]) + self.interval_us
+
+        if self.buffer is not None and len(self.buffer) > 0:
+            buffered = np.concatenate((self.buffer, events))
+        else:
+            buffered = events
+
+        chunks = []
+        while len(buffered) > 0 and int(buffered[time_field][-1]) >= self.next_boundary_us:
+            split_idx = int(np.searchsorted(buffered[time_field], self.next_boundary_us, side="left"))
+            if split_idx == 0:
+                first_ts = int(buffered[time_field][0])
+                skipped = max(1, ((first_ts - self.next_boundary_us) // self.interval_us) + 1)
+                self.next_boundary_us += skipped * self.interval_us
+                continue
+
+            chunks.append(np.ascontiguousarray(buffered[:split_idx]))
+            buffered = buffered[split_idx:]
+            self.next_boundary_us += self.interval_us
+
+        self.buffer = np.ascontiguousarray(buffered) if len(buffered) > 0 else None
+        return chunks
 
 
 def _report(status_callback, message):

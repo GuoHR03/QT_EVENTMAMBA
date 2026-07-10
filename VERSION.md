@@ -1,5 +1,16 @@
 # Version History
 
+## v9
+
+日期：2026-07-10
+
+### RAW 显示窗口与推理窗口解耦
+
+- RAW/Metavision 输入源的读取 `delta_t` 改为按 UI FPS 计算的显示帧间隔，例如 30fps 对应约 33.333ms。
+- 推理输入不再直接复用 RAW 显示事件包，而是在 RAW 事件循环中按 `DEFAULT_NN_INTERVAL_MS` 独立切片。
+- 移除图像回调中的二次墙上时间节流，避免 Metavision 帧生成器已经按 FPS 输出后又被 UI 层额外丢帧。
+- 该改动使 RAW 的显示参数更接近 Metavision Studio 的 `Frame rate / Accumulation time` 语义，同时保持推理模块继续使用 20ms 事件流。
+
 ## v8
 
 日期：2026-07-10

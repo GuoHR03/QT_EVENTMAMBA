@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.camera_source_factory import SOURCE_H5
+from backend.camera_source_factory import SOURCE_H5, SOURCE_METAVISION
 from backend.camera_source_runner import CameraRunContext, close_camera_source, run_camera_source
 
 
@@ -71,6 +71,25 @@ def test_run_h5_source_runs_replay_and_closes_file(monkeypatch):
     assert callable(calls["replay"]["sleep"])
     assert calls["replay"]["replay_factor_getter"]() == 1.5
     assert calls["replay"]["fps_getter"]() == 30
+
+
+def test_run_metavision_source_passes_nn_interval(monkeypatch):
+    calls = {}
+    source = SimpleNamespace(
+        iterator=object(),
+        frame_generator=object(),
+    )
+
+    def fake_event_loop(**kwargs):
+        calls.update(kwargs)
+
+    monkeypatch.setattr("backend.camera_source_runner.run_metavision_event_loop", fake_event_loop)
+
+    run_camera_source(SOURCE_METAVISION, source, _context())
+
+    assert calls["iterator"] is source.iterator
+    assert calls["frame_generator"] is source.frame_generator
+    assert calls["nn_interval_us"] == 20000
 
 
 def _context():

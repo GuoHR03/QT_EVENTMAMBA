@@ -2,7 +2,6 @@
 
 import queue
 import logging
-import time
 from PyQt6.QtCore import QThread, pyqtSignal
 from backend.camera_source_runner import CameraRunContext, run_camera_source
 from backend.camera_source_factory import (
@@ -20,7 +19,7 @@ from backend.event_processing import (
 from backend.inference_payload_worker import InferencePayloadWorker
 from backend.noise_filter import NoiseFilterPipeline
 from backend.recording import RawRecorder
-from backend.replay_clock import normalize_fps
+from backend.replay_clock import frame_interval_us, normalize_fps
 from backend.replay_speed import ReplaySpeedController, normalize_replay_factor
 from backend.settings import (
     DEFAULT_FPS,
@@ -78,8 +77,6 @@ class CameraThread(QThread):
             status_callback=self._report_status,
             report_initial_status=self.report_noise_filter_status,
         )
-        self._last_frame_emit_time = None
-        self._frame_emit_interval_s = 1.0 / self.fps
         self.playback_start_time_us = 0
         self.playback_end_time_us = 0
 
@@ -100,14 +97,6 @@ class CameraThread(QThread):
         self.roi_height = None
 
     def _on_cd_frame_cb(self, ts, frame):
-        emit_time = time.perf_counter()
-        if (
-            self._last_frame_emit_time is not None
-            and emit_time - self._last_frame_emit_time < self._frame_emit_interval_s
-        ):
-            return
-
-        self._last_frame_emit_time = emit_time
         self.image_signal.emit(frame.copy(), int(ts))
 
     def _init_engine(self, palette_type):
@@ -150,7 +139,7 @@ class CameraThread(QThread):
             self._set_roi(self.requested_roi)
             self.source = create_metavision_source(
                 input_path=self.input_path,
-                delta_t_us=self.nn_interval_us,
+                delta_t_us=frame_interval_us(self.fps),
                 replay_factor=self.replay_factor,
                 fps=self.fps,
                 palette_type=palette_type,
@@ -265,8 +254,6 @@ class CameraThread(QThread):
         if palette_type is not None:
             self.palette_type = palette_type
         self.fps = normalize_fps(fps if fps is not None else self.fps)
-        self._frame_emit_interval_s = 1.0 / self.fps
-        self._last_frame_emit_time = None
 
         frame_generator = getattr(self, "event_frame_gen", None)
         if frame_generator is not None and hasattr(frame_generator, "set_display_settings"):

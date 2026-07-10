@@ -63,6 +63,37 @@ def test_run_metavision_event_loop_filters_roi_and_replaces_queue():
     assert frame_generator.frames[0].tolist() == queued.tolist()
 
 
+def test_run_metavision_event_loop_slices_nn_events_independently_from_display():
+    events = np.array(
+        [
+            (1, 1, 1, 0),
+            (2, 2, 1, 10000),
+            (3, 3, 0, 21000),
+            (4, 4, 0, 30000),
+            (5, 5, 1, 41000),
+        ],
+        dtype=EVENT_CD_DTYPE,
+    )
+    target_queue = queue.Queue(maxsize=10)
+    frame_generator = FrameGenerator()
+
+    run_metavision_event_loop(
+        iterator=[events],
+        is_running=lambda: True,
+        roi_getter=lambda: None,
+        noise_filter=PassthroughFilter(),
+        frame_generator=frame_generator,
+        nn_queue=target_queue,
+        nn_interval_us=20000,
+    )
+
+    assert frame_generator.frames[0].tolist() == events.tolist()
+    chunks = []
+    while not target_queue.empty():
+        chunks.append(target_queue.get_nowait())
+    assert [chunk["t"].tolist() for chunk in chunks] == [[0, 10000], [21000, 30000]]
+
+
 def test_run_metavision_event_loop_reports_progress_before_filters():
     events = np.array(
         [(1, 1, 1, 100), (2, 2, 0, 200)],
