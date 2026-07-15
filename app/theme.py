@@ -1,16 +1,26 @@
 APP_STYLE = """
 QWidget {
-    background: #f3f5f8;
+    background: #f4f6f9;
     color: #18202b;
     font-family: "Microsoft YaHei", "Segoe UI", Arial;
     font-size: 13px;
 }
 
+QToolTip {
+    background-color: #f8fafc;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+    border-radius: 5px;
+    padding: 6px 9px;
+    font-family: "Microsoft YaHei", "Segoe UI", Arial;
+    font-size: 12px;
+}
+
 QGroupBox {
     background: #ffffff;
-    border: 1px solid #d9e0ea;
-    border-radius: 8px;
-    margin-top: 16px;
+    border: 1px solid #dce3ec;
+    border-radius: 7px;
+    margin-top: 14px;
     padding: 0;
     font-weight: 600;
 }
@@ -19,7 +29,152 @@ QGroupBox::title {
     subcontrol-origin: margin;
     left: 10px;
     padding: 0 6px;
-    color: #39465a;
+    color: #334155;
+    font-size: 12px;
+}
+
+QWidget#viewer_widget,
+QWidget#viewer_header_widget,
+QWidget#camera_viewport_widget,
+QWidget#playback_progress_widget,
+QWidget#log_header_widget,
+QWidget#control_panel_widget {
+    background: transparent;
+}
+
+QScrollArea#control_panel_scroll_area,
+QScrollArea#control_panel_scroll_area > QWidget > QWidget {
+    background: transparent;
+    border: none;
+}
+
+QScrollArea#control_panel_scroll_area QWidget#control_panel_widget {
+    min-width: 0;
+}
+
+QScrollArea#control_panel_scroll_area QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 0;
+}
+
+QScrollArea#control_panel_scroll_area QScrollBar::handle:vertical {
+    background: #cbd5e1;
+    border-radius: 4px;
+    min-height: 28px;
+}
+
+QScrollArea#control_panel_scroll_area QScrollBar::add-line:vertical,
+QScrollArea#control_panel_scroll_area QScrollBar::sub-line:vertical,
+QScrollArea#control_panel_scroll_area QScrollBar::add-page:vertical,
+QScrollArea#control_panel_scroll_area QScrollBar::sub-page:vertical {
+    background: transparent;
+    border: none;
+    height: 0;
+}
+
+QFrame[uiRole="accordionSection"] {
+    background: #ffffff;
+    border: 1px solid #d7dce3;
+    border-bottom: none;
+    border-radius: 0;
+}
+
+QFrame[uiRole="accordionSection"]:first-child {
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+}
+
+QPushButton[uiRole="accordionHeader"] {
+    background: #fafafa;
+    color: #3b78df;
+    border: none;
+    border-bottom: 1px solid #d7dce3;
+    border-radius: 0;
+    padding: 0 18px;
+    min-height: 54px;
+    text-align: left;
+    font-size: 15px;
+    font-weight: 400;
+}
+
+QPushButton[uiRole="accordionHeader"]:hover {
+    background: #f4f7fb;
+    border: none;
+    border-bottom: 1px solid #cbd3dd;
+}
+
+QPushButton[uiRole="accordionHeader"]:checked {
+    background: #fafafa;
+    color: #2563c7;
+    border: none;
+    border-bottom: 1px solid #d7dce3;
+}
+
+QPushButton[uiRole="accordionHeader"]:disabled {
+    background: #fafafa;
+    color: #a6afbc;
+    border: none;
+    border-bottom: 1px solid #d7dce3;
+}
+
+QGroupBox[uiRole="accordionContent"] {
+    background: #ffffff;
+    border: none;
+    border-bottom: 1px solid #d7dce3;
+    border-radius: 0;
+    margin-top: 0;
+}
+
+QLabel#viewer_title_label,
+QLabel#log_title_label {
+    background: transparent;
+    color: #253247;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QLabel[uiRole="fieldTitle"] {
+    background: transparent;
+    border: none;
+    color: #526174;
+    font-size: 12px;
+    padding-top: 4px;
+}
+
+QLabel[uiRole="statusChip"] {
+    background: #edf1f5;
+    color: #64748b;
+    border: 1px solid #dce3ea;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    min-height: 18px;
+}
+
+QLabel[uiRole="statusChip"][statusState="active"] {
+    background: #e9f8ef;
+    color: #197044;
+    border-color: #b9e5ca;
+}
+
+QLabel[uiRole="statusChip"][statusState="pending"] {
+    background: #fff7e6;
+    color: #9a6700;
+    border-color: #f2d49b;
+}
+
+QLabel[uiRole="statusChip"][statusState="danger"] {
+    background: #fff0f0;
+    color: #b42318;
+    border-color: #efb0b0;
+}
+
+QLabel[uiRole="statusChip"][statusState="info"] {
+    background: #edf5ff;
+    color: #245ea8;
+    border-color: #c5daf5;
 }
 
 QLabel#camera_image_label {
@@ -54,7 +209,7 @@ QPushButton {
     border: 1px solid #cfd8e3;
     border-radius: 6px;
     padding: 6px 10px;
-    min-height: 24px;
+    min-height: 26px;
 }
 
 QPushButton:hover {
@@ -93,6 +248,49 @@ QPushButton#record_button {
     color: #b42318;
 }
 
+QPushButton[buttonRole="primary"] {
+    background: #2563eb;
+    border-color: #1d4ed8;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+QPushButton[buttonRole="primary"]:hover {
+    background: #1d4ed8;
+}
+
+QPushButton[buttonRole="danger"] {
+    background: #dc2626;
+    border-color: #b91c1c;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+QPushButton[buttonRole="danger"]:hover {
+    background: #b91c1c;
+}
+
+QPushButton[buttonRole="dangerOutline"] {
+    background: #ffffff;
+    border-color: #efb0b0;
+    color: #b42318;
+}
+
+QPushButton#clear_log_button,
+QPushButton#log_toggle_button {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #526174;
+    padding: 2px 8px;
+    min-height: 20px;
+}
+
+QPushButton#clear_log_button:hover,
+QPushButton#log_toggle_button:hover {
+    background: #edf2f7;
+    border-color: #d8e0ea;
+}
+
 QComboBox,
 QDoubleSpinBox,
 QSpinBox,
@@ -101,7 +299,14 @@ QLineEdit {
     border: 1px solid #cfd8e3;
     border-radius: 6px;
     padding: 3px 8px;
-    min-height: 24px;
+    min-height: 26px;
+}
+
+QComboBox:hover,
+QDoubleSpinBox:hover,
+QSpinBox:hover,
+QLineEdit:hover {
+    border-color: #aab8c8;
 }
 
 QComboBox:focus,
@@ -116,6 +321,15 @@ QLabel#playback_time_label {
     border: none;
     color: #526174;
     font-family: Consolas, "Microsoft YaHei", monospace;
+    font-size: 12px;
+}
+
+QWidget#control_panel_widget QLabel#palette_text_label,
+QWidget#control_panel_widget QLabel#speed_text_label,
+QWidget#control_panel_widget QLabel#fps_text_label {
+    background: transparent;
+    color: #526174;
+    border: none;
     font-size: 12px;
 }
 
@@ -144,6 +358,10 @@ QSlider#playback_progress_slider:disabled::sub-page:horizontal {
 }
 
 QWidget#ChooseWindowForm QGroupBox {
+    background: #ffffff;
+}
+
+QGroupBox[uiRole="accordionContent"] QWidget#ChooseWindowForm {
     background: #ffffff;
 }
 

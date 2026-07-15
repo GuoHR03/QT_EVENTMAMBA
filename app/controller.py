@@ -29,29 +29,19 @@ class AppController:
         self.settings.update_capture(palette, fps, replay_factor)
 
     def start_camera(self):
-        self.backend.start_camera(
-            self.settings.palette,
-            self.settings.fps,
-            self.settings.roi,
-            self.settings.replay_factor,
-        )
+        self.backend.start_camera(self.settings.playback_config)
 
     def restart_camera_if_running(self):
         if not self.is_camera_running():
             return False
-        self.backend.restart_camera(
-            self.settings.palette,
-            self.settings.fps,
-            self.settings.roi,
-            self.settings.replay_factor,
-        )
+        self.backend.restart_camera(self.settings.playback_config)
         return True
 
     def update_replay_factor(self):
-        self.backend.set_replay_factor(self.settings.replay_factor)
+        self.backend.update_playback_config(self.settings.playback_config)
 
     def update_display_settings(self):
-        self.backend.set_display_settings(self.settings.palette, self.settings.fps)
+        self.backend.update_playback_config(self.settings.playback_config)
 
     def stop_camera(self):
         self.backend.stop_camera()
@@ -97,26 +87,17 @@ class AppController:
         self.backend.stop_eventmamba()
 
     def apply_settings(self, roi, mode, filter_type, threshold_us):
-        previous = (
-            self.settings.roi,
-            self.settings.noise_filter_type,
-            self.settings.noise_filter_threshold_us,
-        )
+        previous = self.settings.playback_config
 
         self.settings.update_prediction(mode)
         self.backend.set_prediction_mode(mode)
         self.settings.update_noise_filter(filter_type, threshold_us)
-        self.backend.set_noise_filter(filter_type, threshold_us, restart_camera=False)
         self.settings.update_roi(roi)
 
-        current = (
-            self.settings.roi,
-            self.settings.noise_filter_type,
-            self.settings.noise_filter_threshold_us,
-        )
+        current = self.settings.playback_config
         changed = current != previous
         if changed:
-            self.restart_camera_if_running()
+            self.backend.update_playback_config(current)
         return changed
 
     def set_prediction_mode(self, mode):
@@ -125,7 +106,7 @@ class AppController:
 
     def update_camera_roi(self, roi):
         self.settings.update_roi(roi)
-        self.backend.update_camera_roi(self.settings.roi)
+        self.backend.update_playback_config(self.settings.playback_config)
 
     def close(self):
         self.backend.close()

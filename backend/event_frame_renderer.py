@@ -2,10 +2,11 @@ from threading import Lock
 
 import numpy as np
 
+from backend.frame_renderer import FrameRenderer
 from backend.palettes import aedat4_rgb_palette
 
 
-class EventFrameRenderer:
+class EventFrameRenderer(FrameRenderer):
     """Render CD events into a BGR image using palette colors."""
 
     def __init__(self, width, height, palette_type="Dark", frame_callback=None):
@@ -16,6 +17,7 @@ class EventFrameRenderer:
         self._lock = Lock()
         self._set_palette_colors(palette_type)
         self._frame = np.empty((self.height, self.width, 3), dtype=np.uint8)
+        self._closed = False
 
     def set_display_settings(self, palette_type=None, fps=None):
         if palette_type is None or palette_type == self.palette_type:
@@ -26,7 +28,7 @@ class EventFrameRenderer:
         return True
 
     def process_events(self, events):
-        if events is None or len(events) == 0 or self.frame_callback is None:
+        if self._closed or events is None or len(events) == 0 or self.frame_callback is None:
             return
 
         with self._lock:
@@ -57,6 +59,18 @@ class EventFrameRenderer:
             self._frame[y[positive], x[positive]] = positive_color
 
         self.frame_callback(int(events["t"][-1]), self._frame.copy())
+
+    def reset(self):
+        if self._closed:
+            return False
+        with self._lock:
+            self._frame[:, :] = self.background
+        return True
+
+    def close(self):
+        with self._lock:
+            self._closed = True
+            self.frame_callback = None
 
     def _set_palette_colors(self, palette_type):
         palette = aedat4_rgb_palette(palette_type)

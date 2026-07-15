@@ -28,16 +28,71 @@ class ChooseWindow(QWidget):
         initial_roi=None,
         initial_noise_filter_type="none",
         initial_noise_filter_threshold_us=10000,
+        parent=None,
+        embedded=False,
     ):
-        super().__init__()
+        super().__init__(parent)
+        self._embedded = embedded
         ui_path = app_resource_path("choose_form.ui")
         uic.loadUi(ui_path, self)
+        if embedded:
+            self._configure_embedded_layout()
         apply_app_theme(self)
         self.select_roi_button.clicked.connect(self.on_confirm)
 
         self.set_selected_mode(initial_mode, emit_signal=False)
         self.set_roi_values(initial_roi)
         self.set_noise_filter_values(initial_noise_filter_type, initial_noise_filter_threshold_us)
+
+    def _configure_embedded_layout(self):
+        """Adapt the dialog-oriented form to the narrow main-window sidebar."""
+        self.setMinimumSize(0, 0)
+        self.choose_main_layout.setContentsMargins(12, 12, 12, 12)
+        self.choose_main_layout.setSpacing(6)
+        self.mode_card_frame.setMinimumHeight(0)
+        self.roi_card_frame.setMinimumHeight(0)
+        self.noise_filter_widget.setMinimumHeight(0)
+        self.mode_layout.setContentsMargins(8, 6, 8, 6)
+        self.mode_layout.setSpacing(8)
+
+        while self.roi_grid_layout.count():
+            self.roi_grid_layout.takeAt(0)
+        self.roi_grid_layout.setContentsMargins(8, 8, 8, 8)
+        self.roi_grid_layout.setHorizontalSpacing(8)
+        self.roi_grid_layout.setVerticalSpacing(6)
+        roi_rows = (
+            (self.X_label, self.X_edit),
+            (self.Y_label, self.Y_edit),
+            (self.Width_label, self.Width_edit),
+            (self.Height_label, self.Height_edit),
+        )
+        for row, (label, editor) in enumerate(roi_rows):
+            label.setMinimumWidth(54)
+            editor.setMinimumWidth(0)
+            self.roi_grid_layout.addWidget(label, row, 0)
+            self.roi_grid_layout.addWidget(editor, row, 1)
+        self.roi_grid_layout.setColumnStretch(1, 1)
+        roi_height = (
+            sum(editor.minimumHeight() for _, editor in roi_rows)
+            + self.roi_grid_layout.verticalSpacing() * (len(roi_rows) - 1)
+            + 16
+        )
+        self.roi_card_frame.setMinimumHeight(roi_height)
+
+        self.noise_filter_formLayout.setContentsMargins(8, 8, 8, 8)
+        self.noise_filter_formLayout.setHorizontalSpacing(8)
+        self.noise_filter_formLayout.setVerticalSpacing(6)
+        self.noise_filter_label.setMinimumWidth(88)
+        self.noise_threshold_label.setMinimumWidth(88)
+        noise_height = (
+            self.noise_filter_combo_box.minimumHeight()
+            + self.noise_threshold_spin_box.minimumHeight()
+            + self.noise_filter_formLayout.verticalSpacing()
+            + 16
+        )
+        self.noise_filter_widget.setMinimumHeight(noise_height)
+        self.select_roi_button.setText("应用设置")
+        self.select_roi_button.setMinimumSize(0, 36)
 
     def _current_mode(self):
         if self.eli_radioButton.isChecked():
@@ -96,8 +151,10 @@ class ChooseWindow(QWidget):
                 QMessageBox.warning(self, "区域无效", "感兴趣区域未更新。请将所有输入框填写为整数，或全部留空。")
                 return
             self.settings_confirmed.emit(None, mode, filter_type, threshold_us)
-            self.close()
+            if not self._embedded:
+                self.close()
             return
 
         self.settings_confirmed.emit((x, y, width, height), mode, filter_type, threshold_us)
-        self.close()
+        if not self._embedded:
+            self.close()

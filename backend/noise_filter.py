@@ -1,3 +1,5 @@
+from threading import RLock
+
 from backend.event_processing import (
     NOISE_FILTER_DISPLAY_NAMES,
     normalize_noise_filter_type,
@@ -35,51 +37,96 @@ class NoiseFilterPipeline:
         self.algorithm = None
         self.output = None
         self.warning_printed = False
+        self.width = None
+        self.height = None
+        self._lock = RLock()
 
     @property
     def enabled(self):
-        return self.algorithm is not None
+        with self._lock:
+            return self.algorithm is not None
 
     def initialize(self, width, height):
+        with self._lock:
+            self.width = int(width)
+            self.height = int(height)
+            self._initialize_locked(report_initial=True)
+
+    def update_settings(self, filter_type, threshold_us):
+        next_filter_type = normalize_noise_filter_type(filter_type)
+        next_threshold_us = max(1, int(threshold_us or 10000))
+        with self._lock:
+            if next_filter_type == self.filter_type and next_threshold_us == self.threshold_us:
+                return False
+            self.filter_type = next_filter_type
+            self.threshold_us = next_threshold_us
+            self.algorithm = None
+            self.output = None
+            self.warning_printed = False
+            if self.width is not None and self.height is not None:
+                self._initialize_locked(report_initial=False)
+        return True
+
+    def reset(self):
+        with self._lock:
+            self.algorithm = None
+            self.output = None
+            self.warning_printed = False
+            if self.width is not None and self.height is not None:
+                self._initialize_locked(report_initial=False, report=False)
+
+    def _initialize_locked(self, report_initial, report=True):
+        self.algorithm = None
+        self.output = None
         if self.filter_type == "none":
-            self._report_initial("[NoiseFilter] Disabled")
+            if report:
+                self._report_status("[NoiseFilter] Disabled", report_initial)
             return
 
         if _METAVISION_CV_IMPORT_ERROR is not None:
-            self._report_initial(f"[NoiseFilter] Metavision CV unavailable: {_METAVISION_CV_IMPORT_ERROR}")
-            self.filter_type = "none"
+            if report:
+                self._report_status(
+                    f"[NoiseFilter] Metavision CV unavailable: {_METAVISION_CV_IMPORT_ERROR}",
+                    report_initial,
+                )
             return
 
         try:
-            self.algorithm = self._create_algorithm(width, height)
+            self.algorithm = self._create_algorithm(self.width, self.height)
             self.output = self.algorithm.get_empty_output_buffer()
-            self._report_initial(
-                "[NoiseFilter] Enabled "
-                f"{NOISE_FILTER_DISPLAY_NAMES[self.filter_type]} "
-                f"(threshold={self.threshold_us}us)"
-            )
+            if report:
+                self._report_status(
+                    "[NoiseFilter] Enabled "
+                    f"{NOISE_FILTER_DISPLAY_NAMES[self.filter_type]} "
+                    f"(threshold={self.threshold_us}us)",
+                    report_initial,
+                )
         except Exception as exc:
-            self._report_initial(f"[NoiseFilter] Failed to initialize {self.filter_type}: {exc}")
-            self.filter_type = "none"
+            if report:
+                self._report_status(
+                    f"[NoiseFilter] Failed to initialize {self.filter_type}: {exc}",
+                    report_initial,
+                )
             self.algorithm = None
             self.output = None
 
     def apply(self, events):
-        if self.algorithm is None or events is None or len(events) == 0:
-            return events
+        with self._lock:
+            if self.algorithm is None or events is None or len(events) == 0:
+                return events
 
-        try:
-            event_cd = to_event_cd(events)
-            self.algorithm.process_events(event_cd, self.output)
             try:
-                return self.output.numpy(copy=True)
-            except TypeError:
-                return self.output.numpy().copy()
-        except Exception as exc:
-            if not self.warning_printed:
-                self._report(f"[NoiseFilter] Filtering failed, passing raw events through: {exc}")
-                self.warning_printed = True
-            return events
+                event_cd = to_event_cd(events)
+                self.algorithm.process_events(event_cd, self.output)
+                try:
+                    return self.output.numpy(copy=True)
+                except TypeError:
+                    return self.output.numpy().copy()
+            except Exception as exc:
+                if not self.warning_printed:
+                    self._report(f"[NoiseFilter] Filtering failed, passing raw events through: {exc}")
+                    self.warning_printed = True
+                return events
 
     def _create_algorithm(self, width, height):
         if self.filter_type == "activity":
@@ -133,4 +180,10 @@ class NoiseFilterPipeline:
 
     def _report_initial(self, message):
         if self.report_initial_status:
+            self._report(message)
+
+    def _report_status(self, message, initial):
+        if initial:
+            self._report_initial(message)
+        else:
             self._report(message)

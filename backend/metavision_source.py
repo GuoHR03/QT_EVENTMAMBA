@@ -1,9 +1,7 @@
 import logging
 import time
+from threading import Event
 
-import numpy as np
-
-from backend.event_processing import event_time_field, filter_events_by_roi, replace_oldest_nowait
 from backend.replay_speed import normalize_replay_factor
 
 LOGGER = logging.getLogger(__name__)
@@ -30,6 +28,7 @@ class DynamicReplayEventsIterator:
         self.replay_factor_getter = replay_factor_getter or (lambda: replay_factor)
         self.sleep = sleep
         self.now = now
+        self._stop_requested = Event()
 
     @property
     def start_ts(self):
@@ -46,11 +45,16 @@ class DynamicReplayEventsIterator:
         return self.iterator.get_current_time()
 
     def __iter__(self):
+        if self._stop_requested.is_set():
+            return
+
         anchor_sensor_time = int(self.start_ts or 0)
         anchor_real_time = self.now()
         replay_factor = normalize_replay_factor(self.replay_factor_getter())
 
         for events in self.iterator:
+            if self._stop_requested.is_set():
+                break
             target_sensor_time = int(self.iterator.get_current_time())
             anchor_sensor_time, anchor_real_time, replay_factor = self._sleep_until(
                 target_sensor_time,
@@ -58,10 +62,14 @@ class DynamicReplayEventsIterator:
                 anchor_real_time,
                 replay_factor,
             )
+            if self._stop_requested.is_set():
+                break
             yield events
 
     def _sleep_until(self, target_sensor_time, anchor_sensor_time, anchor_real_time, replay_factor):
         while True:
+            if self._stop_requested.is_set():
+                return anchor_sensor_time, anchor_real_time, replay_factor
             current_time = self.now()
             current_factor = normalize_replay_factor(self.replay_factor_getter())
             if current_factor != replay_factor:
@@ -73,7 +81,14 @@ class DynamicReplayEventsIterator:
             if sleep_time <= 0:
                 return anchor_sensor_time, anchor_real_time, replay_factor
 
-            self.sleep(min(sleep_time, MAX_DYNAMIC_REPLAY_SLEEP_S))
+            sleep_duration = min(sleep_time, MAX_DYNAMIC_REPLAY_SLEEP_S)
+            if self.sleep is time.sleep:
+                self._stop_requested.wait(sleep_duration)
+            else:
+                self.sleep(sleep_duration)
+
+    def request_stop(self):
+        self._stop_requested.set()
 
 
 def create_metavision_iterator(
@@ -123,15 +138,9 @@ def apply_hardware_roi(device, roi, status_callback=None):
 def run_metavision_event_loop(
     iterator,
     is_running,
-    roi_getter,
-    noise_filter,
-    frame_generator,
-    nn_queue,
-    nn_interval_us=None,
+    event_pipeline,
     progress_callback=None,
 ):
-    nn_slicer = _InferenceEventSlicer(nn_interval_us) if nn_interval_us is not None else None
-
     for events in iterator:
         if not is_running():
             break
@@ -140,56 +149,7 @@ def run_metavision_event_loop(
         if progress_callback is not None:
             progress_callback(int(events["t"][-1]))
 
-        events = filter_events_by_roi(events, roi_getter())
-        events = noise_filter.apply(events)
-        if len(events) == 0:
-            continue
-
-        frame_generator.process_events(events)
-        if nn_slicer is None:
-            replace_oldest_nowait(nn_queue, events)
-        else:
-            for nn_events in nn_slicer.consume(events):
-                replace_oldest_nowait(nn_queue, nn_events)
-
-
-class _InferenceEventSlicer:
-    def __init__(self, interval_us):
-        self.interval_us = max(1, int(interval_us or 1))
-        self.next_boundary_us = None
-        self.buffer = None
-
-    def consume(self, events):
-        if events is None or len(events) == 0:
-            return []
-
-        time_field = event_time_field(events)
-        if time_field is None:
-            return [events]
-
-        if self.next_boundary_us is None:
-            self.next_boundary_us = int(events[time_field][0]) + self.interval_us
-
-        if self.buffer is not None and len(self.buffer) > 0:
-            buffered = np.concatenate((self.buffer, events))
-        else:
-            buffered = events
-
-        chunks = []
-        while len(buffered) > 0 and int(buffered[time_field][-1]) >= self.next_boundary_us:
-            split_idx = int(np.searchsorted(buffered[time_field], self.next_boundary_us, side="left"))
-            if split_idx == 0:
-                first_ts = int(buffered[time_field][0])
-                skipped = max(1, ((first_ts - self.next_boundary_us) // self.interval_us) + 1)
-                self.next_boundary_us += skipped * self.interval_us
-                continue
-
-            chunks.append(np.ascontiguousarray(buffered[:split_idx]))
-            buffered = buffered[split_idx:]
-            self.next_boundary_us += self.interval_us
-
-        self.buffer = np.ascontiguousarray(buffered) if len(buffered) > 0 else None
-        return chunks
+        event_pipeline.process_events(events)
 
 
 def _report(status_callback, message):

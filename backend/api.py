@@ -28,8 +28,6 @@ class BackendAPI(QObject):
         )
         self.inference = InferenceService(self.camera_queue, self.prediction_signal)
         self.prediction_mode = "center"
-        self.noise_filter_type = "none"
-        self.noise_filter_threshold_us = 10000
 
     def is_camera_running(self):
         return self.camera.is_running()
@@ -43,54 +41,39 @@ class BackendAPI(QObject):
     def set_input_file(self, file_path):
         self.camera.set_input_file(file_path)
 
-    def start_camera(self, palette, fps, roi=None, replay_factor=1.0):
-        self.camera.start(
-            palette,
-            fps,
-            roi,
-            replay_factor,
-            self.noise_filter_type,
-            self.noise_filter_threshold_us,
-        )
+    def start_camera(self, config):
+        self.camera.start(config=config)
         self._enqueue_camera_config()
 
-    def restart_camera(self, palette=None, fps=None, roi=None, replay_factor=None):
-        self.camera.restart(
-            palette,
-            fps,
-            roi,
-            replay_factor,
-            self.noise_filter_type,
-            self.noise_filter_threshold_us,
-        )
+    def restart_camera(self, config=None):
+        self.camera.restart(config=config)
         self._enqueue_camera_config()
 
     def seek_playback(self, seek_fraction):
         if not self.camera.is_running():
             return
-        self.camera.seek(
-            seek_fraction,
-            self.noise_filter_type,
-            self.noise_filter_threshold_us,
-        )
+        self.camera.seek(seek_fraction)
         self._enqueue_camera_config()
 
-    def set_replay_factor(self, replay_factor):
-        self.camera.set_replay_factor(replay_factor)
-        LOGGER.info("Replay speed set to: %sx", replay_factor)
-
-    def set_display_settings(self, palette, fps):
-        self.camera.set_display_settings(palette, fps)
-        LOGGER.info("Display settings set to: palette=%s, fps=%s", palette, fps)
+    def update_playback_config(self, config):
+        restarted = self.camera.apply_config(config)
+        LOGGER.info(
+            "Playback config updated: palette=%s, fps=%s, speed=%sx, roi=%s, noise=%s/%sus",
+            config.palette,
+            config.fps,
+            config.replay_factor,
+            config.roi,
+            config.noise_filter_type,
+            config.noise_filter_threshold_us,
+        )
+        return restarted
 
     def stop_camera(self):
         self.camera.stop(emit_finished=False)
 
     def update_camera_roi(self, roi):
-        if self.camera.is_running():
-            self.restart_camera(roi=roi)
-        else:
-            LOGGER.info("Camera is not running; ROI will be applied on next start")
+        config = self.camera.current_config().with_updates(roi=roi)
+        return self.update_playback_config(config)
 
     def set_prediction_mode(self, mode):
         mode_changed = self.prediction_mode != mode
@@ -99,24 +82,12 @@ class BackendAPI(QObject):
         if mode_changed and self.is_inference_running() and self.inference.weights_path:
             self.restart_eventmamba()
 
-    def set_noise_filter(self, filter_type, threshold_us, restart_camera=True):
-        filter_type = filter_type or "none"
-        try:
-            threshold_us = int(threshold_us)
-        except (TypeError, ValueError):
-            threshold_us = 10000
-        threshold_us = max(1, threshold_us)
-
-        changed = (
-            self.noise_filter_type != filter_type
-            or self.noise_filter_threshold_us != threshold_us
+    def set_noise_filter(self, filter_type, threshold_us, restart_camera=False):
+        config = self.camera.current_config().with_updates(
+            noise_filter_type=filter_type,
+            noise_filter_threshold_us=threshold_us,
         )
-        self.noise_filter_type = filter_type
-        self.noise_filter_threshold_us = threshold_us
-        LOGGER.info("Noise filter: %s, threshold=%sus", filter_type, threshold_us)
-
-        if changed and restart_camera and self.camera.is_running():
-            self.restart_camera(roi=self.camera.current_roi())
+        return self.update_playback_config(config)
 
     def start_recording(self):
         self.camera.start_recording()

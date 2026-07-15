@@ -77,3 +77,32 @@ def test_noise_filter_failure_reports_once_and_returns_raw_events():
 
     assert len(messages) == 1
     assert messages[0].startswith("[NoiseFilter] Filtering failed")
+
+
+def test_noise_filter_settings_hot_update_rebuilds_and_disables(monkeypatch):
+    messages = []
+    pipeline = NoiseFilterPipeline("none", status_callback=messages.append)
+    algorithms = []
+
+    def create_algorithm(width, height):
+        algorithm = FakeAlgorithm()
+        algorithms.append(algorithm)
+        return algorithm
+
+    monkeypatch.setattr("backend.noise_filter._METAVISION_CV_IMPORT_ERROR", None)
+    monkeypatch.setattr(pipeline, "_create_algorithm", create_algorithm)
+    pipeline.initialize(640, 480)
+
+    assert pipeline.update_settings("activity", 5000)
+    assert pipeline.enabled
+    assert pipeline.filter_type == "activity"
+    assert pipeline.threshold_us == 5000
+
+    message_count = len(messages)
+    pipeline.reset()
+    assert len(algorithms) == 2
+    assert len(messages) == message_count
+
+    assert pipeline.update_settings("none", 5000)
+    assert not pipeline.enabled
+    assert messages[-1] == "[NoiseFilter] Disabled"

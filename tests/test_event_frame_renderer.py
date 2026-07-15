@@ -2,6 +2,7 @@ import numpy as np
 
 from backend.event_frame_renderer import EventFrameRenderer
 from backend.event_processing import EVENT_CD_DTYPE
+from backend.frame_renderer import FrameRenderer
 
 
 def test_event_frame_renderer_draws_bgr_palette_pixels():
@@ -19,6 +20,7 @@ def test_event_frame_renderer_draws_bgr_palette_pixels():
 
     renderer.process_events(events)
 
+    assert isinstance(renderer, FrameRenderer)
     timestamp, frame = callbacks[0]
     assert timestamp == 200
     assert frame.shape == (3, 4, 3)
@@ -96,3 +98,22 @@ def test_event_frame_renderer_callbacks_receive_stable_frame_copy():
 
     assert first_frame[1, 1].tolist() == [255, 255, 255]
     assert first_frame[2, 2].tolist() == [128, 128, 128]
+
+
+def test_event_frame_renderer_supports_reset_and_close_lifecycle():
+    callbacks = []
+    renderer = EventFrameRenderer(
+        width=2,
+        height=2,
+        palette_type="Dark",
+        frame_callback=lambda ts, frame: callbacks.append((ts, frame)),
+    )
+    events = np.array([(1, 1, 1, 100)], dtype=EVENT_CD_DTYPE)
+
+    assert renderer.reset()
+    renderer.process_events(events)
+    renderer.close()
+    renderer.process_events(events)
+
+    assert len(callbacks) == 1
+    assert not renderer.reset()

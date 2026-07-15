@@ -22,13 +22,12 @@ def should_emit_frame(events, next_frame_time):
     return int(events[time_field][-1]) >= next_frame_time
 
 
-def split_next_aedat4_nn_chunk(buffer_events, next_nn_time):
+def split_events_at_time(buffer_events, boundary_time):
     time_field = event_time_field(buffer_events)
     if time_field is None:
         return None, buffer_events, None
-    if len(buffer_events) == 0 or int(buffer_events[time_field][-1]) < next_nn_time:
+    if len(buffer_events) == 0 or int(buffer_events[time_field][-1]) < boundary_time:
         return None, buffer_events, time_field
 
-    split_idx = int(np.searchsorted(buffer_events[time_field], next_nn_time))
+    split_idx = int(np.searchsorted(buffer_events[time_field], boundary_time))
     return buffer_events[:split_idx], buffer_events[split_idx:], time_field
-

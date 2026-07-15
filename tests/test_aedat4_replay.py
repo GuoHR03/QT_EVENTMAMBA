@@ -6,7 +6,7 @@ from backend.aedat4_replay import (
     replay_sleep_s,
     should_emit_frame,
     should_reset_replay_clock,
-    split_next_aedat4_nn_chunk,
+    split_events_at_time,
 )
 
 
@@ -40,35 +40,35 @@ def test_should_emit_frame_uses_available_time_field():
     assert not should_emit_frame(np.array([], dtype=EVENTS_DTYPE), 1)
 
 
-def test_split_next_aedat4_nn_chunk_returns_chunk_and_remainder():
+def test_split_events_at_time_returns_chunk_and_remainder():
     events = np.array(
         [(1, 1, 1, 100), (2, 2, 1, 120), (3, 3, 1, 150)],
         dtype=EVENTS_DTYPE,
     )
 
-    chunk, remaining, time_field = split_next_aedat4_nn_chunk(events, 130)
+    chunk, remaining, time_field = split_events_at_time(events, 130)
 
     assert time_field == "timestamp"
     assert chunk.tolist() == [(1, 1, 1, 100), (2, 2, 1, 120)]
     assert remaining.tolist() == [(3, 3, 1, 150)]
 
 
-def test_split_next_aedat4_nn_chunk_handles_empty_first_chunk():
+def test_split_events_at_time_handles_empty_first_chunk():
     events = np.array(
         [(1, 1, 1, 100), (2, 2, 1, 120)],
         dtype=EVENTS_DTYPE,
     )
 
-    chunk, remaining, _ = split_next_aedat4_nn_chunk(events, 100)
+    chunk, remaining, _ = split_events_at_time(events, 100)
 
     assert len(chunk) == 0
     assert remaining.tolist() == events.tolist()
 
 
-def test_split_next_aedat4_nn_chunk_waits_until_target_is_reached():
+def test_split_events_at_time_waits_until_target_is_reached():
     events = np.array([(1, 1, 1, 100)], dtype=EVENTS_DTYPE)
 
-    chunk, remaining, time_field = split_next_aedat4_nn_chunk(events, 200)
+    chunk, remaining, time_field = split_events_at_time(events, 200)
 
     assert chunk is None
     assert remaining.tolist() == events.tolist()

@@ -3,6 +3,7 @@ import queue
 import numpy as np
 import pytest
 
+from backend.event_pipeline import EventPipeline
 from backend.event_processing import EVENT_CD_DTYPE
 from backend.metavision_source import DynamicReplayEventsIterator, metavision_replay_factor, run_metavision_event_loop
 
@@ -52,10 +53,12 @@ def test_run_metavision_event_loop_filters_roi_and_replaces_queue():
     run_metavision_event_loop(
         iterator=[events],
         is_running=lambda: True,
-        roi_getter=lambda: (10, 10, 5, 5),
-        noise_filter=PassthroughFilter(),
-        frame_generator=frame_generator,
-        nn_queue=target_queue,
+        event_pipeline=EventPipeline(
+            roi_getter=lambda: (10, 10, 5, 5),
+            noise_filter=PassthroughFilter(),
+            renderer=frame_generator,
+            inference_queue=target_queue,
+        ),
     )
 
     queued = target_queue.get_nowait()
@@ -80,11 +83,13 @@ def test_run_metavision_event_loop_slices_nn_events_independently_from_display()
     run_metavision_event_loop(
         iterator=[events],
         is_running=lambda: True,
-        roi_getter=lambda: None,
-        noise_filter=PassthroughFilter(),
-        frame_generator=frame_generator,
-        nn_queue=target_queue,
-        nn_interval_us=20000,
+        event_pipeline=EventPipeline(
+            roi_getter=lambda: None,
+            noise_filter=PassthroughFilter(),
+            renderer=frame_generator,
+            inference_queue=target_queue,
+            inference_interval_us=20000,
+        ),
     )
 
     assert frame_generator.frames[0].tolist() == events.tolist()
@@ -104,10 +109,12 @@ def test_run_metavision_event_loop_reports_progress_before_filters():
     run_metavision_event_loop(
         iterator=[events],
         is_running=lambda: True,
-        roi_getter=lambda: (99, 99, 1, 1),
-        noise_filter=PassthroughFilter(),
-        frame_generator=FrameGenerator(),
-        nn_queue=queue.Queue(),
+        event_pipeline=EventPipeline(
+            roi_getter=lambda: (99, 99, 1, 1),
+            noise_filter=PassthroughFilter(),
+            renderer=FrameGenerator(),
+            inference_queue=queue.Queue(),
+        ),
         progress_callback=lambda timestamp: progress.append(timestamp),
     )
 
@@ -180,3 +187,20 @@ def test_dynamic_replay_iterator_reanchors_when_speed_changes_during_sleep():
     list(iterator)
 
     assert sleeps == [pytest.approx(0.05)]
+
+
+def test_dynamic_replay_iterator_stops_during_replay_wait():
+    current_time = [0.0]
+    iterator = None
+
+    def fake_sleep(_duration):
+        iterator.request_stop()
+
+    iterator = DynamicReplayEventsIterator(
+        FakeMetavisionIterator([20000]),
+        replay_factor_getter=lambda: 1.0,
+        sleep=fake_sleep,
+        now=lambda: current_time[0],
+    )
+
+    assert list(iterator) == []

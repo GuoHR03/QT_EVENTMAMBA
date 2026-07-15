@@ -1,73 +1,46 @@
-import logging
-import queue
+from threading import Lock
 
-import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from backend.event_processing import build_inference_payload, put_latest, to_event_cd
-
-LOGGER = logging.getLogger(__name__)
+from backend.inference_payload import InferencePayloadProcessor
+from backend.inference_worker_control import INFERENCE_STOP_SIGNAL, enqueue_inference_stop
 
 
 class InferencePayloadWorker(QThread):
-    """Build inference payloads from event batches at a fixed interval."""
+    """Build inference payloads from pre-sliced event windows."""
 
     finished_signal = pyqtSignal()
 
-    def __init__(self, nn_queue, nn_interval_us, width, height, target_queue, analysis_enabled, roi=None):
+    def __init__(self, nn_queue, width, height, target_queue, analysis_enabled, roi=None, roi_getter=None):
         super().__init__()
         self.nn_queue = nn_queue
-        self.nn_interval_us = nn_interval_us
-        self.width = width
-        self.height = height
-        self.target_queue = target_queue
-        self.analysis_enabled = analysis_enabled
-        self.roi = roi
         self.is_running = True
+        self._stop_signal_enqueued = False
+        self._stop_lock = Lock()
+        self.processor = InferencePayloadProcessor(
+            width=width,
+            height=height,
+            target_queue=target_queue,
+            analysis_enabled=analysis_enabled,
+            roi=roi,
+            roi_getter=roi_getter,
+        )
 
     def run(self):
-        buffer = []
-        next_nn_time = None
+        while True:
+            events = self.nn_queue.get()
+            if events is INFERENCE_STOP_SIGNAL:
+                break
 
-        while self.is_running:
-            try:
-                events = self.nn_queue.get(timeout=0.001)
-            except queue.Empty:
-                continue
+            self.processor.process(events)
 
-            try:
-                events = to_event_cd(events)
-            except ValueError as exc:
-                LOGGER.exception("InferencePayloadWorker received invalid event data: %s", exc)
-                continue
-
-            buffer.append(events)
-
-            if next_nn_time is None:
-                next_nn_time = int(events["t"][-1]) + self.nn_interval_us
-                continue
-
-            if int(events["t"][-1]) >= next_nn_time:
-                self._emit_payload(buffer)
-                buffer = []
-                next_nn_time += self.nn_interval_us
-
+        self.is_running = False
         self.finished_signal.emit()
 
-    def _emit_payload(self, buffer):
-        if not buffer or self.target_queue is None or not self.analysis_enabled():
-            return
-
-        try:
-            nn_events = np.concatenate(buffer)
-            payload = build_inference_payload(
-                nn_events,
-                width=self.width,
-                height=self.height,
-                roi=self.roi,
-                fallback_normalization="crop",
-            )
-            if payload is not None:
-                put_latest(self.target_queue, payload)
-        except Exception as exc:
-            LOGGER.exception("InferencePayloadWorker error: %s", exc)
+    def stop(self, discard_pending=True):
+        with self._stop_lock:
+            if self._stop_signal_enqueued:
+                return
+            self._stop_signal_enqueued = True
+            self.is_running = False
+            enqueue_inference_stop(self.nn_queue, discard_pending)

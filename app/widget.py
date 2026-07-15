@@ -9,9 +9,23 @@ except ImportError:
 configure_runtime(__file__)
 
 from PyQt6 import uic
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPixmap
-from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
+from PyQt6.QtCore import QSize, QTimer, Qt
+from PyQt6.QtGui import QColor, QImage, QPixmap, QTextCharFormat, QTextCursor
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLayout,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
 try:
     from .choose_windows import ChooseWindow
@@ -22,6 +36,8 @@ try:
     from .prediction_state import PredictionState
     from .settings import AppSettings
     from .theme import apply_app_theme
+    from .ui_log import log_level_for_message
+    from .ui_status import source_display_name
     from .view_state import MainViewState
 except ImportError:
     from choose_windows import ChooseWindow
@@ -32,6 +48,8 @@ except ImportError:
     from prediction_state import PredictionState
     from settings import AppSettings
     from theme import apply_app_theme
+    from ui_log import log_level_for_message
+    from ui_status import source_display_name
     from view_state import MainViewState
 
 SUPPORTED_PALETTES = {"Dark", "Light", "CoolWarm", "Gray"}
@@ -63,19 +81,45 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         uic.loadUi(app_resource_path("form.ui"), self)
-        self._init_playback_progress_ui()
-        apply_app_theme(self)
-        self.resize(1180, 780)
-
         self.settings = AppSettings()
+        self._compact_startup_pending = True
+        self._init_workspace_ui()
+        apply_app_theme(self)
+        self._set_initial_window_geometry()
+
         self.controller = AppController(self.settings)
         self.view_state = MainViewState(self)
         self.predictions = PredictionState(interval_ms=20)
         self._is_dragging_progress = False
         self._progress_total_us = 0
+        self._last_frame_size = None
 
         self._connect_signals()
         self._init_view_state()
+
+    def _set_initial_window_geometry(self):
+        """Choose a comfortable, centered size without occupying the screen."""
+        self.setMinimumSize(860, 600)
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.resize(1100, 700)
+            return
+
+        available = screen.availableGeometry()
+        width = min(1180, max(900, int(available.width() * 0.72)))
+        height = min(760, max(620, int(available.height() * 0.72)))
+        width = min(width, available.width())
+        height = min(height, available.height())
+        self.resize(width, height)
+        self.move(
+            available.x() + (available.width() - width) // 2,
+            available.y() + (available.height() - height) // 2,
+        )
+
+    def _init_workspace_ui(self):
+        self._init_playback_progress_ui()
+        self._init_control_panel_ui()
+        self._init_log_panel_ui()
 
     def _init_playback_progress_ui(self):
         self.playback_progress_slider = QSlider(Qt.Orientation.Horizontal, self)
@@ -96,23 +140,371 @@ class MainWindow(QWidget):
         viewer_layout = QVBoxLayout(viewer_widget)
         viewer_layout.setContentsMargins(0, 0, 0, 0)
         viewer_layout.setSpacing(8)
-        viewer_layout.addWidget(image_widget, 1)
 
-        progress_layout = QHBoxLayout()
+        viewer_header = QWidget(viewer_widget)
+        viewer_header.setObjectName("viewer_header_widget")
+        self.viewer_header_widget = viewer_header
+        viewer_header_layout = QHBoxLayout(viewer_header)
+        viewer_header_layout.setContentsMargins(2, 0, 2, 0)
+        viewer_header_layout.setSpacing(8)
+
+        viewer_title = QLabel("事件画面", viewer_header)
+        viewer_title.setObjectName("viewer_title_label")
+        viewer_header_layout.addWidget(viewer_title)
+        viewer_header_layout.addStretch(1)
+
+        self.source_status_label = self._create_status_chip("实时输入", "info", viewer_header)
+        self.camera_status_label = self._create_status_chip("已停止", "idle", viewer_header)
+        self.model_status_label = self._create_status_chip("模型未加载", "idle", viewer_header)
+        self.mode_status_label = self._create_status_chip("中心点", "info", viewer_header)
+        viewer_header_layout.addWidget(self.source_status_label)
+        viewer_header_layout.addWidget(self.camera_status_label)
+        viewer_header_layout.addWidget(self.model_status_label)
+        viewer_header_layout.addWidget(self.mode_status_label)
+
+        viewer_layout.addWidget(
+            viewer_header,
+            0,
+            Qt.AlignmentFlag.AlignHCenter,
+        )
+        self.camera_viewport_widget = QWidget(viewer_widget)
+        self.camera_viewport_widget.setObjectName("camera_viewport_widget")
+        camera_viewport_layout = QVBoxLayout(self.camera_viewport_widget)
+        camera_viewport_layout.setContentsMargins(0, 0, 0, 0)
+        camera_viewport_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image_widget.setMinimumSize(0, 0)
+        image_widget.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        camera_viewport_layout.addWidget(image_widget)
+        viewer_layout.addWidget(self.camera_viewport_widget, 1)
+
+        self.playback_progress_widget = QWidget(viewer_widget)
+        self.playback_progress_widget.setObjectName("playback_progress_widget")
+        progress_layout = QHBoxLayout(self.playback_progress_widget)
         progress_layout.setContentsMargins(0, 0, 0, 0)
         progress_layout.setSpacing(10)
         progress_layout.addWidget(self.playback_progress_slider, 1)
         progress_layout.addWidget(self.playback_time_label)
-        viewer_layout.addLayout(progress_layout)
+        viewer_layout.addWidget(
+            self.playback_progress_widget,
+            0,
+            Qt.AlignmentFlag.AlignHCenter,
+        )
 
         self.content_horizontal_layout.insertWidget(0, viewer_widget, 1)
         self.content_horizontal_layout.setStretch(0, 1)
         self.content_horizontal_layout.setStretch(1, 0)
 
+    def _init_control_panel_ui(self):
+        self.setWindowTitle("事件相机推理工具")
+        self.control_panel_widget.setMinimumWidth(0)
+        self.control_panel_widget.setMaximumWidth(310)
+        self.control_panel_widget.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        # Height is updated explicitly when accordion sections change. Keep
+        # horizontal sizing flexible so long file names cannot widen the
+        # scroll area's content beyond its viewport.
+        self.control_panel_layout.setSizeConstraint(QLayout.SizeConstraint.SetDefaultConstraint)
+        self.settings_group_box.setMinimumHeight(0)
+
+        panel_index = self.content_horizontal_layout.indexOf(self.control_panel_widget)
+        self.content_horizontal_layout.removeWidget(self.control_panel_widget)
+        self.control_panel_scroll_area = QScrollArea(self)
+        self.control_panel_scroll_area.setObjectName("control_panel_scroll_area")
+        self.control_panel_scroll_area.setMinimumWidth(250)
+        self.control_panel_scroll_area.setMaximumWidth(310)
+        self.control_panel_scroll_area.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
+        )
+        self.control_panel_scroll_area.setWidgetResizable(True)
+        self.control_panel_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.control_panel_scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.control_panel_scroll_area.setWidget(self.control_panel_widget)
+        self.content_horizontal_layout.insertWidget(panel_index, self.control_panel_scroll_area)
+
+        self.model_group_box.setTitle("模型")
+        self.input_group_box.setTitle("输入")
+        self.settings_group_box.setTitle("显示与处理")
+        self.capture_group_box.setTitle("采集")
+        self.palette_text_label.setText("配色")
+        self.speed_text_label.setText("回放速度")
+        self.fps_text_label.setText("帧率")
+        self.roi_window_button.setText("区域、模式与去噪")
+        self.select_weight_button.setText("选择权重")
+        self.unload_model_button.setText("关闭模型")
+        self.select_input_file_button.setText("选择数据文件")
+        self.weight_path_label.setText("尚未选择权重")
+        self.input_file_label.setText("实时相机")
+
+        self.palette_combo_box.setToolTip("选择事件极性的显示配色")
+        self.replay_speed_combo_box.setToolTip("调整离线文件的回放速度")
+        self.fps_spin_box.setToolTip("显示帧率，同时决定事件帧累计时间")
+        self.roi_window_button.setToolTip("配置 ROI、预测模式和事件去噪")
+        self.record_button.setText("录制 RAW")
+        self.record_button.setToolTip("仅实时相机支持录制 RAW 数据")
+
+        self.settings_group_layout.removeWidget(self.roi_window_button)
+        self.roi_window_button.hide()
+        self.roi_settings_editor = ChooseWindow(
+            initial_mode=self.settings.prediction_mode,
+            initial_roi=self.settings.roi,
+            initial_noise_filter_type=self.settings.noise_filter_type,
+            initial_noise_filter_threshold_us=self.settings.noise_filter_threshold_us,
+            parent=self.control_panel_widget,
+            embedded=True,
+        )
+        self.roi_settings_group_box = QGroupBox(self.control_panel_widget)
+        roi_settings_layout = QVBoxLayout(self.roi_settings_group_box)
+        roi_settings_layout.setContentsMargins(0, 0, 0, 0)
+        roi_settings_layout.addWidget(self.roi_settings_editor)
+
+        self._build_logical_control_groups()
+
+        self.settings_group_layout.setContentsMargins(12, 18, 12, 12)
+        self.settings_group_layout.setSpacing(9)
+        for layout in (
+            self.model_group_layout,
+            self.input_group_layout,
+            self.capture_group_layout,
+        ):
+            layout.setContentsMargins(12, 18, 12, 12)
+
+        self._init_control_panel_accordion()
+
+    def _build_logical_control_groups(self):
+        """Regroup existing controls by workflow without replacing their signals."""
+        old_groups = (
+            self.model_group_box,
+            self.input_group_box,
+            self.settings_group_box,
+            self.capture_group_box,
+            self.roi_settings_group_box,
+        )
+        for group in old_groups:
+            self.control_panel_layout.removeWidget(group)
+            group.hide()
+
+        flexible_controls = (
+            self.input_file_label,
+            self.select_input_file_button,
+            self.replay_speed_combo_box,
+            self.start_camera_button,
+            self.record_button,
+            self.weight_path_label,
+            self.select_weight_button,
+            self.load_model_button,
+            self.unload_model_button,
+            self.palette_combo_box,
+            self.fps_spin_box,
+            self.roi_settings_editor.noise_filter_combo_box,
+            self.roi_settings_editor.noise_threshold_spin_box,
+            self.roi_settings_editor.X_edit,
+            self.roi_settings_editor.Y_edit,
+            self.roi_settings_editor.Width_edit,
+            self.roi_settings_editor.Height_edit,
+        )
+        for control in flexible_controls:
+            control.setMinimumWidth(0)
+            control.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                control.sizePolicy().verticalPolicy(),
+            )
+        self.input_file_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Fixed,
+        )
+
+        self.source_group_box = QGroupBox(self.control_panel_widget)
+        source_layout = QVBoxLayout(self.source_group_box)
+        source_layout.setContentsMargins(12, 12, 12, 12)
+        source_layout.setSpacing(8)
+        source_layout.addWidget(self.input_file_label)
+        source_layout.addWidget(self.select_input_file_button)
+
+        self.playback_group_box = QGroupBox(self.control_panel_widget)
+        playback_layout = QVBoxLayout(self.playback_group_box)
+        playback_layout.setContentsMargins(12, 12, 12, 12)
+        playback_layout.setSpacing(8)
+        speed_layout = QHBoxLayout()
+        speed_layout.setSpacing(10)
+        speed_layout.addWidget(self.speed_text_label)
+        speed_layout.addWidget(self.replay_speed_combo_box, 1)
+        playback_layout.addLayout(speed_layout)
+        playback_layout.addWidget(self.start_camera_button)
+
+        self.recording_group_box = QGroupBox(self.control_panel_widget)
+        recording_layout = QVBoxLayout(self.recording_group_box)
+        recording_layout.setContentsMargins(12, 12, 12, 12)
+        recording_layout.addWidget(self.record_button)
+
+        self.inference_group_box = QGroupBox(self.control_panel_widget)
+        inference_layout = QVBoxLayout(self.inference_group_box)
+        inference_layout.setContentsMargins(12, 12, 12, 12)
+        inference_layout.setSpacing(8)
+        inference_layout.addWidget(self.weight_path_label)
+        inference_layout.addWidget(self.select_weight_button)
+        model_buttons = QHBoxLayout()
+        model_buttons.setSpacing(8)
+        model_buttons.addWidget(self.load_model_button)
+        model_buttons.addWidget(self.unload_model_button)
+        inference_layout.addLayout(model_buttons)
+        self.prediction_mode_group_box = QGroupBox(self.control_panel_widget)
+        mode_layout = QHBoxLayout(self.prediction_mode_group_box)
+        mode_layout.setContentsMargins(12, 12, 12, 12)
+        mode_layout.setSpacing(8)
+        mode_layout.addWidget(self.roi_settings_editor.center_radioButton)
+        mode_layout.addWidget(self.roi_settings_editor.eli_radioButton)
+        mode_layout.addStretch(1)
+
+        self.processing_group_box = QGroupBox(self.control_panel_widget)
+        processing_layout = QGridLayout(self.processing_group_box)
+        processing_layout.setContentsMargins(12, 12, 12, 12)
+        processing_layout.setHorizontalSpacing(10)
+        processing_layout.setVerticalSpacing(8)
+        denoise_label = QLabel("去噪算法", self.processing_group_box)
+        threshold_label = QLabel("阈值 (μs)", self.processing_group_box)
+        processing_layout.addWidget(denoise_label, 0, 0)
+        processing_layout.addWidget(self.roi_settings_editor.noise_filter_combo_box, 0, 1)
+        processing_layout.addWidget(threshold_label, 1, 0)
+        processing_layout.addWidget(self.roi_settings_editor.noise_threshold_spin_box, 1, 1)
+        processing_layout.addWidget(self.fps_text_label, 2, 0)
+        processing_layout.addWidget(self.fps_spin_box, 2, 1)
+        processing_layout.setColumnStretch(1, 1)
+
+        self.display_group_box = QGroupBox(self.control_panel_widget)
+        display_layout = QGridLayout(self.display_group_box)
+        display_layout.setContentsMargins(12, 12, 12, 12)
+        display_layout.addWidget(self.palette_text_label, 0, 0)
+        display_layout.addWidget(self.palette_combo_box, 0, 1)
+        display_layout.setColumnStretch(1, 1)
+
+        self.roi_group_box = QGroupBox(self.control_panel_widget)
+        roi_layout = QGridLayout(self.roi_group_box)
+        roi_layout.setContentsMargins(12, 12, 12, 12)
+        roi_layout.setHorizontalSpacing(10)
+        roi_layout.setVerticalSpacing(8)
+        roi_fields = (
+            ("X", self.roi_settings_editor.X_edit),
+            ("Y", self.roi_settings_editor.Y_edit),
+            ("宽度", self.roi_settings_editor.Width_edit),
+            ("高度", self.roi_settings_editor.Height_edit),
+        )
+        for row, (text, editor) in enumerate(roi_fields, start=1):
+            editor.setMinimumWidth(0)
+            roi_layout.addWidget(QLabel(text, self.roi_group_box), row, 0)
+            roi_layout.addWidget(editor, row, 1)
+        roi_layout.addWidget(self.roi_settings_editor.select_roi_button, 5, 0, 1, 2)
+        roi_layout.setColumnStretch(1, 1)
+
+    def _init_control_panel_accordion(self):
+        """Turn the existing control groups into a compact accordion."""
+        sections = (
+            (self.source_group_box, "数据源"),
+            (self.playback_group_box, "播放控制"),
+            (self.recording_group_box, "数据录制"),
+            (self.inference_group_box, "模型管理"),
+            (self.prediction_mode_group_box, "预测模式"),
+            (self.processing_group_box, "事件预处理"),
+            (self.display_group_box, "显示设置"),
+            (self.roi_group_box, "ROI 区域"),
+        )
+        self._control_accordion_sections = []
+
+        for group_box, title in sections:
+            self.control_panel_layout.removeWidget(group_box)
+            group_box.setTitle("")
+            group_box.setProperty("uiRole", "accordionContent")
+
+            section = QFrame(self.control_panel_widget)
+            section.setProperty("uiRole", "accordionSection")
+            section_layout = QVBoxLayout(section)
+            section_layout.setContentsMargins(0, 0, 0, 0)
+            section_layout.setSpacing(0)
+
+            header = QPushButton(title, section)
+            header.setProperty("uiRole", "accordionHeader")
+            header.setCheckable(True)
+            header.setCursor(Qt.CursorShape.PointingHandCursor)
+            header.setMinimumHeight(54)
+            header.clicked.connect(
+                lambda checked, target=group_box: self._set_accordion_section(target, checked)
+            )
+
+            section_layout.addWidget(header)
+            section_layout.addWidget(group_box)
+            self._control_accordion_sections.append((header, group_box))
+
+        spacer_index = self.control_panel_layout.count() - 1
+        for offset, (section, _) in enumerate(
+            (entry[0].parentWidget(), entry[1]) for entry in self._control_accordion_sections
+        ):
+            self.control_panel_layout.insertWidget(spacer_index + offset, section)
+
+        self.control_panel_layout.setSpacing(0)
+        self._set_accordion_section(self.source_group_box, True)
+
+    def _set_accordion_section(self, target, expanded):
+        for header, content in self._control_accordion_sections:
+            is_target = content is target
+            is_expanded = bool(expanded) if is_target else False
+            header.blockSignals(True)
+            header.setChecked(is_expanded)
+            header.blockSignals(False)
+            content.setVisible(is_expanded)
+        self.control_panel_layout.activate()
+        self.control_panel_widget.setMinimumHeight(
+            self.control_panel_layout.sizeHint().height()
+        )
+        self.control_panel_widget.updateGeometry()
+
+    def _init_log_panel_ui(self):
+        self._log_collapsed = False
+        self.log_group_box.setTitle("")
+        self.log_text_edit.setReadOnly(True)
+        self.log_text_edit.setMinimumHeight(72)
+        self.log_text_edit.setMaximumHeight(110)
+
+        log_header = QWidget(self.log_group_box)
+        log_header.setObjectName("log_header_widget")
+        log_header_layout = QHBoxLayout(log_header)
+        log_header_layout.setContentsMargins(2, 0, 2, 0)
+        log_header_layout.setSpacing(6)
+
+        log_title = QLabel("运行日志", log_header)
+        log_title.setObjectName("log_title_label")
+        log_header_layout.addWidget(log_title)
+        log_header_layout.addStretch(1)
+
+        self.clear_log_button = QPushButton("清空", log_header)
+        self.clear_log_button.setObjectName("clear_log_button")
+        self.log_toggle_button = QPushButton("收起", log_header)
+        self.log_toggle_button.setObjectName("log_toggle_button")
+        log_header_layout.addWidget(self.clear_log_button)
+        log_header_layout.addWidget(self.log_toggle_button)
+        self.log_group_layout.insertWidget(0, log_header)
+
+    @staticmethod
+    def _create_status_chip(text, state, parent):
+        label = QLabel(text, parent)
+        label.setProperty("uiRole", "statusChip")
+        label.setProperty("statusState", state)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        return label
+
     def _connect_signals(self):
         self.start_camera_button.clicked.connect(self.toggle_camera)
         self.record_button.clicked.connect(self.toggle_recording)
-        self.roi_window_button.clicked.connect(self.show_roi_window)
+        self.roi_settings_editor.settings_confirmed.connect(self.on_settings_confirmed)
+        self.roi_settings_editor.noise_filter_combo_box.currentTextChanged.connect(
+            self._update_noise_threshold_enabled
+        )
         self.palette_combo_box.currentTextChanged.connect(self.update_display_settings)
         self.fps_spin_box.valueChanged.connect(self.update_display_settings)
         self.replay_speed_combo_box.currentTextChanged.connect(self.update_replay_speed)
@@ -123,9 +515,11 @@ class MainWindow(QWidget):
         self.playback_progress_slider.sliderPressed.connect(self._begin_progress_drag)
         self.playback_progress_slider.sliderMoved.connect(self._preview_progress_drag)
         self.playback_progress_slider.sliderReleased.connect(self._finish_progress_drag)
+        self.clear_log_button.clicked.connect(self.log_text_edit.clear)
+        self.log_toggle_button.clicked.connect(self._toggle_log_panel)
         self.controller.connect_view(
             self._display_image_with_prediction,
-            self.log_text_edit.append,
+            self.append_log,
             self._buffer_prediction_result,
             self.handle_playback_finished,
             self.handle_playback_progress,
@@ -139,7 +533,78 @@ class MainWindow(QWidget):
         self.view_state.set_camera_stopped()
         self.view_state.set_recording_stopped(enabled=False)
         self.view_state.set_model_unloaded()
+        self._set_status_chip(
+            self.mode_status_label,
+            mode_display_name(self.settings.prediction_mode),
+            "info",
+        )
         self._reset_playback_progress()
+        self._update_noise_threshold_enabled(
+            self.roi_settings_editor.noise_filter_combo_box.currentText()
+        )
+
+    def _update_noise_threshold_enabled(self, filter_name):
+        enabled = str(filter_name).strip().lower() != "none"
+        self.roi_settings_editor.noise_threshold_spin_box.setEnabled(enabled)
+
+    def append_log(self, message, level=None):
+        message = str(message)
+        level = level or log_level_for_message(message)
+        colors = {
+            "default": "#dbeafe",
+            "info": "#93c5fd",
+            "success": "#86efac",
+            "warning": "#fbbf24",
+            "error": "#fca5a5",
+        }
+        text_format = QTextCharFormat()
+        text_format.setForeground(QColor(colors.get(level, colors["default"])))
+
+        cursor = self.log_text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(f"{message}\n", text_format)
+        self.log_text_edit.setTextCursor(cursor)
+        self.log_text_edit.ensureCursorVisible()
+
+    def set_runtime_status(self, target, text, state="idle"):
+        label = getattr(self, f"{target}_status_label", None)
+        if label is not None:
+            self._set_status_chip(label, text, state)
+
+    def set_source_status(self, file_path):
+        self._last_frame_size = None
+        if file_path and not self.controller.is_camera_running():
+            self.start_camera_button.setText("开始播放")
+        normalized_path = str(file_path or "").replace("\\", "/")
+        full_name = normalized_path.rsplit("/", 1)[-1] or self.input_file_label.text()
+        self._input_file_display_name = full_name
+        self.input_file_label.setToolTip(
+            f"完整文件名：{full_name}\n完整路径：{file_path}"
+        )
+        QTimer.singleShot(0, self._elide_input_file_name)
+        self._set_status_chip(
+            self.source_status_label,
+            source_display_name(file_path),
+            "info",
+        )
+
+    @staticmethod
+    def _set_status_chip(label, text, state):
+        label.setText(str(text))
+        label.setProperty("statusState", state)
+        label.style().unpolish(label)
+        label.style().polish(label)
+
+    def _toggle_log_panel(self):
+        self._log_collapsed = not self._log_collapsed
+        self.log_text_edit.setVisible(not self._log_collapsed)
+        self.log_toggle_button.setText("展开" if self._log_collapsed else "收起")
+        if self._log_collapsed:
+            self.log_group_box.setMaximumHeight(48)
+        else:
+            self.log_group_box.setMaximumHeight(16777215)
+        self.log_group_box.updateGeometry()
+        QTimer.singleShot(0, self._fit_event_view)
 
     def toggle_camera(self):
         if not self.controller.is_camera_running():
@@ -171,6 +636,17 @@ class MainWindow(QWidget):
             bytes_per_line = width
             img_format = QImage.Format.Format_Grayscale8
 
+        frame_size = (width, height)
+        if frame_size != self._last_frame_size:
+            self._last_frame_size = frame_size
+            self._fit_event_view()
+            source_name = source_display_name(self.controller.input_file_path)
+            self._set_status_chip(
+                self.source_status_label,
+                f"{source_name}  {width}x{height}",
+                "info",
+            )
+
         q_img = QImage(cv_img.data, width, height, bytes_per_line, img_format)
         matched_prediction = self.predictions.match_frame(img_timestamp)
         if matched_prediction is not None:
@@ -185,8 +661,66 @@ class MainWindow(QWidget):
             )
         )
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "camera_viewport_widget"):
+            QTimer.singleShot(0, self._fit_event_view)
+        if hasattr(self, "input_file_label"):
+            QTimer.singleShot(0, self._elide_input_file_name)
+
+    def _elide_input_file_name(self):
+        if not hasattr(self, "_input_file_display_name"):
+            return
+        available_width = max(40, self.input_file_label.contentsRect().width() - 16)
+        display_text = self.input_file_label.fontMetrics().elidedText(
+            self._input_file_display_name,
+            Qt.TextElideMode.ElideMiddle,
+            available_width,
+        )
+        self.input_file_label.setText(display_text)
+
+    def _fit_event_view(self):
+        if not hasattr(self, "camera_viewport_widget"):
+            return
+        available = self.camera_viewport_widget.contentsRect().size()
+        if available.width() <= 0 or available.height() <= 0:
+            return
+
+        # Use a widescreen placeholder before the first frame arrives. Once a
+        # source is active, its real resolution replaces this fallback.
+        source_width, source_height = self._last_frame_size or (1280, 720)
+        aspect_ratio = source_width / max(1, source_height)
+        target_width = min(available.width(), int(available.height() * aspect_ratio))
+        target_height = min(available.height(), int(target_width / aspect_ratio))
+        target_width = max(1, target_width)
+        target_height = max(1, target_height)
+
+        if self._compact_startup_pending and self.isVisible():
+            self._compact_startup_pending = False
+            horizontal_surplus = available.width() - target_width
+            if horizontal_surplus > 24 and not self.isMaximized():
+                compact_width = max(
+                    self.minimumWidth(),
+                    self.width() - horizontal_surplus,
+                )
+                window_center = self.frameGeometry().center()
+                self.resize(compact_width, self.height())
+                compact_geometry = self.frameGeometry()
+                compact_geometry.moveCenter(window_center)
+                self.move(compact_geometry.topLeft())
+                return
+
+        if self.camera_image_label.size() != QSize(target_width, target_height):
+            self.camera_image_label.setFixedSize(target_width, target_height)
+        for aligned_widget in (
+            self.viewer_header_widget,
+            self.playback_progress_widget,
+        ):
+            if aligned_widget.width() != target_width:
+                aligned_widget.setFixedWidth(target_width)
+
     def _buffer_prediction_result(self, result, pred_timestamp):
-        self.log_text_edit.append(backend_message(result))
+        self.append_log(backend_message(result))
         self.predictions.add_result(result, pred_timestamp, self.settings.prediction_mode)
 
     def closeEvent(self, event):
@@ -262,44 +796,38 @@ class MainWindow(QWidget):
         if stopped_running_model:
             self.view_state.set_model_unloaded()
             self.predictions.clear()
-            self.log_text_edit.append("已选择新权重，请重新加载模型")
+            self.append_log("已选择新权重，请重新加载模型", "info")
 
     def load_eventmamba(self):
         if self.controller.weights_path is None:
-            self.log_text_edit.append("请先选择权重文件")
+            self.append_log("请先选择权重文件", "warning")
             return
 
         self.view_state.set_model_loading()
-        self.log_text_edit.append(
-            f"正在启动 WSL 推理服务并加载{mode_display_name(self.settings.prediction_mode)}模式权重，首次加载可能需要几秒钟..."
+        self.append_log(
+            f"正在启动 WSL 推理服务并加载{mode_display_name(self.settings.prediction_mode)}模式权重，首次加载可能需要几秒钟...",
+            "info",
         )
         QApplication.processEvents()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
         try:
             self.controller.load_model()
         except Exception as exc:
             self.view_state.set_model_unloaded()
-            self.log_text_edit.append(f"加载模型失败：{exc}")
+            self.append_log(f"加载模型失败：{exc}", "error")
             return
+        finally:
+            QApplication.restoreOverrideCursor()
 
-        self.log_text_edit.append("WSL 推理服务已就绪，权重加载完成")
+        self.append_log("WSL 推理服务已就绪，权重加载完成", "success")
         self.view_state.set_model_loaded()
 
     def unload_eventmamba(self):
         self.controller.unload_model()
         self.view_state.set_model_unloaded()
-        self.log_text_edit.append("WSL 推理服务已关闭，可以重新选择权重并加载")
+        self.append_log("WSL 推理服务已关闭，可以重新选择权重并加载", "info")
         self.predictions.clear()
-
-    def show_roi_window(self):
-        self.roi_window = ChooseWindow(
-            initial_mode=self.settings.prediction_mode,
-            initial_roi=self.settings.roi,
-            initial_noise_filter_type=self.settings.noise_filter_type,
-            initial_noise_filter_threshold_us=self.settings.noise_filter_threshold_us,
-        )
-        self.roi_window.settings_confirmed.connect(self.on_settings_confirmed)
-        self.roi_window.show()
 
     def on_settings_confirmed(self, roi, mode, filter_type, threshold_us):
         self._sync_capture_settings_from_ui()
@@ -312,9 +840,13 @@ class MainWindow(QWidget):
         if camera_settings_changed and self.controller.is_camera_running():
             QApplication.processEvents()
 
-        self.log_text_edit.append(noise_settings_message(filter_type, self.settings.noise_filter_threshold_us))
+        self.append_log(
+            noise_settings_message(filter_type, self.settings.noise_filter_threshold_us),
+            "info",
+        )
         if roi is not None:
-            self.log_text_edit.append(roi_settings_message(self.settings.roi, mode))
+            self.append_log(roi_settings_message(self.settings.roi, mode), "info")
+        self._set_status_chip(self.mode_status_label, mode_display_name(mode), "info")
 
     def _selected_palette(self):
         selected = self.palette_combo_box.currentText()
