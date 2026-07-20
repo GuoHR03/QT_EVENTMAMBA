@@ -29,6 +29,14 @@ build/
 dist/
 installer/
 wsl/*.tar
+wsl/*/
+artifacts/*.onnx
+artifacts/*.npz
+.venv-onnx-win/
+.onnx-wheel-cache/
+.native-cache/
+native/selective_scan_ort/build/
+onnxruntime_profile__*.json
 
 # Packaging files kept in source
 *.spec
