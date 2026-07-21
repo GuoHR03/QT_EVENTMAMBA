@@ -88,6 +88,7 @@ class MainWindow(QWidget):
         self._set_initial_window_geometry()
 
         self.controller = AppController(self.settings)
+        self._configure_inference_runtime_ui()
         self.view_state = MainViewState(self)
         self.predictions = PredictionState(interval_ms=20)
         self._is_dragging_progress = False
@@ -96,6 +97,17 @@ class MainWindow(QWidget):
 
         self._connect_signals()
         self._init_view_state()
+
+    def _configure_inference_runtime_ui(self):
+        if self.controller.inference_runtime_kind != "windows":
+            return
+
+        self.select_weight_button.setText("选择 ONNX 模型")
+        self.select_weight_button.setToolTip("选择已转换的 Windows ONNX 模型")
+        self.weight_path_label.setText("尚未选择 ONNX 模型")
+        self.roi_settings_editor.eli_radioButton.setToolTip(
+            "使用 Windows ONNX/CUDA 椭圆模型输出位置、长短轴和角度"
+        )
 
     def _set_initial_window_geometry(self):
         """Choose a comfortable, centered size without occupying the screen."""
@@ -787,7 +799,10 @@ class MainWindow(QWidget):
         self.controller.set_input_file(file_path, restart_if_running=True)
 
     def select_weight_file(self):
-        weights_path = choose_weights_file(self)
+        weights_path = choose_weights_file(
+            self,
+            runtime_kind=self.controller.inference_runtime_kind,
+        )
         if not weights_path:
             return
 
@@ -796,16 +811,17 @@ class MainWindow(QWidget):
         if stopped_running_model:
             self.view_state.set_model_unloaded()
             self.predictions.clear()
-            self.append_log("已选择新权重，请重新加载模型", "info")
+            self.append_log("已选择新模型，请重新加载", "info")
 
     def load_eventmamba(self):
         if self.controller.weights_path is None:
-            self.append_log("请先选择权重文件", "warning")
+            self.append_log("请先选择模型文件", "warning")
             return
 
+        runtime_name = self.controller.inference_runtime_display_name
         self.view_state.set_model_loading()
         self.append_log(
-            f"正在启动 WSL 推理服务并加载{mode_display_name(self.settings.prediction_mode)}模式权重，首次加载可能需要几秒钟...",
+            f"正在启动 {runtime_name} 推理服务并加载{mode_display_name(self.settings.prediction_mode)}模型，首次加载可能需要几秒钟...",
             "info",
         )
         QApplication.processEvents()
@@ -820,13 +836,16 @@ class MainWindow(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
 
-        self.append_log("WSL 推理服务已就绪，权重加载完成", "success")
+        self.append_log(f"{runtime_name} 推理服务已就绪，模型加载完成", "success")
+        if self.controller.active_model_path:
+            self.view_state.set_weight_file(self.controller.active_model_path)
         self.view_state.set_model_loaded()
 
     def unload_eventmamba(self):
         self.controller.unload_model()
         self.view_state.set_model_unloaded()
-        self.append_log("WSL 推理服务已关闭，可以重新选择权重并加载", "info")
+        runtime_name = self.controller.inference_runtime_display_name
+        self.append_log(f"{runtime_name} 推理服务已关闭，可以重新选择模型并加载", "info")
         self.predictions.clear()
 
     def on_settings_confirmed(self, roi, mode, filter_type, threshold_us):
@@ -847,6 +866,8 @@ class MainWindow(QWidget):
         if roi is not None:
             self.append_log(roi_settings_message(self.settings.roi, mode), "info")
         self._set_status_chip(self.mode_status_label, mode_display_name(mode), "info")
+        if self.controller.is_inference_running() and self.controller.active_model_path:
+            self.view_state.set_weight_file(self.controller.active_model_path)
 
     def _selected_palette(self):
         selected = self.palette_combo_box.currentText()

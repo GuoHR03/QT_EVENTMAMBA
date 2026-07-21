@@ -17,3 +17,7 @@ def default_record_dir():
 
 def default_checkpoint_dir():
     return str(project_root() / "checkpoint")
+
+
+def default_onnx_model_dir():
+    return str(project_root() / "artifacts")

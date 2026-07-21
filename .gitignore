@@ -32,6 +32,10 @@ wsl/*.tar
 wsl/*/
 artifacts/*.onnx
 artifacts/*.npz
+artifacts/*.npy
+!artifacts/eventmamba_center_selective_scan_cuda.onnx
+!artifacts/eventmamba_ellipse_selective_scan_cuda.onnx
+!artifacts/eventmamba_ellipse_matrix_A.npy
 .venv-onnx-win/
 .onnx-wheel-cache/
 .native-cache/

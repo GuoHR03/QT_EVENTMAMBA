@@ -17,6 +17,18 @@ class AppController:
     def is_inference_running(self):
         return self.backend.is_inference_running()
 
+    @property
+    def inference_runtime_kind(self):
+        return self.backend.inference.runtime_kind
+
+    @property
+    def inference_runtime_display_name(self):
+        return self.backend.inference.runtime_display_name
+
+    @property
+    def active_model_path(self):
+        return self.backend.inference.active_model_path
+
     def connect_view(self, image_handler, status_handler, prediction_handler, playback_finished_handler, progress_handler=None):
         self.backend.image_signal.connect(image_handler)
         self.backend.camera_status_signal.connect(status_handler)

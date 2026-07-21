@@ -19,7 +19,7 @@ class NetworkThread(QThread):
         self._last_error = None
 
     def run(self):
-        """与linux通信"""
+        """与本机或 WSL 推理服务通信。"""
         self.context = zmq.Context()
         self._open_socket()
         try:
@@ -38,7 +38,7 @@ class NetworkThread(QThread):
                     self._last_error = None
                     self.result_signal.emit(result, timestamp)
                 except zmq.Again:
-                    self._emit_error_once("通信超时：请确认 WSL 推理服务已启动", timestamp)
+                    self._emit_error_once("通信超时：请确认推理服务已启动", timestamp)
                     self._reset_socket()
                 except zmq.ZMQError as exc:
                     if self.running:

@@ -1,11 +1,11 @@
 # UI_Event
 
-基于 PyQt6 的事件相机可视化与 EventMamba 推理工具，支持实时相机采集、离线文件回放、ROI 设置、去噪配置、WSL 后端推理，以及预测结果叠加显示。
+基于 PyQt6 的事件相机可视化与 EventMamba 推理工具，支持实时相机采集、离线文件回放、ROI 设置、去噪配置、Windows 原生 ONNX/CUDA 推理，以及预测结果叠加显示。WSL 后端保留为兼容选项。
 
 ## 当前状态
 
-- 支持 `center` 中心点预测，输出 `(x, y)`
-- 支持 `ellipse` 椭圆预测，输出 `[x, y, a, b, angle]`
+- Windows 原生后端支持 `center` 中心点预测，输出 `(x, y)`
+- Windows 原生后端支持 `ellipse` 椭圆预测，输出 `[x, y, a, b, angle]`
 - 支持 `RAW / HDF5 / H5 / AEDAT4` 离线回放
 - `RAW / H5` 使用 Metavision `PeriodicFrameGenerationAlgorithm` 生成事件帧
 - `AEDAT4` 使用项目内置 `EventFrameRenderer`，颜色与 Metavision SDK 调色板保持一致
@@ -27,7 +27,8 @@
 - 日志区域支持清空与折叠，右侧显示和处理参数使用统一控件层级
 - 运行日志按信息、成功、警告和错误分色，输入状态会在首帧后显示实际分辨率
 - 前端与后端通过 ZeroMQ 通信
-- Windows 端负责 UI、相机与显示，WSL 端负责模型推理
+- 默认由 Windows 端同时负责 UI、相机、显示和 ONNX/CUDA 模型推理
+- 可通过环境变量显式切换到原有 WSL 推理后端
 
 ## 功能介绍
 
@@ -59,10 +60,12 @@
 
 ### 推理与叠加显示
 
-- 支持 `center` 与 `ellipse` 两种预测模式。
+- Windows 原生 ONNX/CUDA 后端支持 `center` 与 `ellipse` 两种模式，并可在界面中切换。
+- 椭圆网络输出 1024 维 VSA 向量，Windows 后端使用 NumPy 和导出的 `matrix_A.npy` 解码为五个椭圆参数。
+- 设置 `EVENTMAMBA_INFERENCE_RUNTIME=wsl` 后仍可使用原有 PyTorch 模型作为兼容或对照后端。
 - 网络实现通过 `PredictorRegistry` 按模式注册；模型加载、输入推理和输出解码封装在独立 Predictor 中。
 - 更换同输入输出的网络时，只需实现 Predictor 并更新注册项，不需要修改事件读取、20ms 切片或请求处理主流程。
-- Windows UI 负责事件采集、可视化和请求发送，WSL 后端负责 EventMamba 模型推理。
+- Windows UI 通过 ZeroMQ 调用独立的 Windows Python 进程；该进程使用 ONNX Runtime CUDA 和自定义 `selective_scan` CUDA 算子完成 EventMamba 推理。
 - 推理结果携带事件时间戳，UI 按时间匹配图像帧后叠加绘制，降低结果和画面错位。
 
 ## 项目结构
@@ -71,6 +74,7 @@
 UI_Event/
 ├── main.py
 ├── linux_backend.py
+├── windows_backend.py
 ├── app/
 │   ├── widget.py              # 主窗口协调
 │   ├── controller.py          # UI 到后端的控制层
@@ -88,7 +92,11 @@ UI_Event/
 ├── backend/
 │   ├── api.py                 # 后端统一门面
 │   ├── camera_service.py      # 相机线程生命周期与配置
-│   ├── inference_service.py   # WSL 推理服务管理
+│   ├── inference_service.py   # Windows/WSL 推理服务管理
+│   ├── windows_process.py     # Windows 后端进程生命周期
+│   ├── windows_onnx_runtime.py # ONNX Runtime CUDA DLL 准备
+│   ├── windows_onnx_predictor.py # Windows ONNX 中心点/椭圆推理
+│   ├── ellipse_decoder.py     # 不依赖 PyTorch 的 VSA 椭圆解码
 │   ├── Camera.py              # 底层相机/离线流处理
 │   ├── camera_source_factory.py # 旧工厂导入兼容层
 │   ├── camera_source_runner.py # 不同输入源的运行分发
@@ -118,6 +126,8 @@ UI_Event/
 │   └── models/
 ├── libs/                      # Metavision 运行依赖
 ├── checkpoint/                # 模型权重目录
+├── artifacts/                 # 转换后的 ONNX 模型（本机产物）
+├── native/selective_scan_ort/ # Windows selective_scan 自定义算子
 ├── record/                    # 录制/离线文件目录
 ├── scripts/                   # 安装、运行和打包辅助脚本
 ├── tools/                     # 离线调试/实验工具脚本
@@ -137,27 +147,50 @@ QtCreator 中也建议将启动脚本设置为 `main.py`。
 ## 环境要求
 
 - Windows 10/11
-- Python 3.8+
+- UI Python 3.8+
+- 独立的 Windows 推理 Python 环境（当前验证环境为 Python 3.13）
 - PyQt6
 - pyzmq
 - numpy
 - opencv-python
-- torch
-- WSL2
+- ONNX Runtime GPU、CUDA 与 cuDNN 运行库
 - Metavision SDK
+
+只有在使用兼容后端时才需要 WSL2、PyTorch、Mamba 及其 Linux 环境。
 
 ## 环境变量
 
-```bash
-EVENTMAMBA_WSL_DISTRO=EventMamba_mini
-EVENTMAMBA_LINUX_PYTHON=/opt/miniconda3/envs/eventmamba/bin/python
+```text
+EVENTMAMBA_INFERENCE_RUNTIME=windows
+EVENTMAMBA_WINDOWS_PYTHON=.venv-onnx-win/Scripts/python.exe
+EVENTMAMBA_CENTER_ONNX_MODEL=artifacts/eventmamba_center_selective_scan_cuda.onnx
+EVENTMAMBA_ELLIPSE_ONNX_MODEL=artifacts/eventmamba_ellipse_selective_scan_cuda.onnx
+EVENTMAMBA_ELLIPSE_MATRIX=artifacts/eventmamba_ellipse_matrix_A.npy
+EVENTMAMBA_SELECTIVE_SCAN_DLL=native/selective_scan_ort/bin/eventmamba_selective_scan.dll
 EVENTMAMBA_BACKEND_READY_TIMEOUT_S=180
 METAVISION_SDK_PATH=E:\Metavision\Prophesee
 ```
 
+Windows 是默认值，因此通常不需要设置第一项。兼容 WSL 后端可使用：
+
+```text
+EVENTMAMBA_INFERENCE_RUNTIME=wsl
+EVENTMAMBA_WSL_DISTRO=EventMamba_mini
+EVENTMAMBA_LINUX_PYTHON=/opt/miniconda3/envs/eventmamba/bin/python
+```
+
 ## 模型文件
 
-`ellipse` 模式需要权重文件同目录下存在 `matrix_A.pt`：
+Windows 推理需要两个转换后的 ONNX 模型、椭圆解码矩阵和匹配的自定义 CUDA DLL。默认位置为：
+
+```text
+artifacts/eventmamba_center_selective_scan_cuda.onnx
+artifacts/eventmamba_ellipse_selective_scan_cuda.onnx
+artifacts/eventmamba_ellipse_matrix_A.npy
+native/selective_scan_ort/bin/eventmamba_selective_scan.dll
+```
+
+WSL 的 `ellipse` 模式仍需要权重文件同目录下存在 `matrix_A.pt`：
 
 ```text
 checkpoint/

@@ -22,8 +22,8 @@ def wait_for_backend_ready_with_log(
             if backend_process is not None and backend_process.poll() is not None:
                 details = read_backend_log_tail(log_path)
                 if details:
-                    raise RuntimeError(f"WSL 推理服务启动失败，进程已退出。\n后端日志：\n{details}")
-                raise RuntimeError("WSL 推理服务启动失败，进程已退出")
+                    raise RuntimeError(f"推理服务启动失败，进程已退出。\n后端日志：\n{details}")
+                raise RuntimeError("推理服务启动失败，进程已退出")
 
             socket = context.socket(zmq.REQ)
             socket.setsockopt(zmq.LINGER, 0)
@@ -44,8 +44,8 @@ def wait_for_backend_ready_with_log(
 
         details = read_backend_log_tail(log_path)
         if details:
-            raise TimeoutError(f"等待 WSL 推理服务就绪超时。\n后端日志：\n{details}")
-        raise TimeoutError("等待 WSL 推理服务就绪超时")
+            raise TimeoutError(f"等待推理服务就绪超时。\n后端日志：\n{details}")
+        raise TimeoutError("等待推理服务就绪超时")
     finally:
         context.term()
 

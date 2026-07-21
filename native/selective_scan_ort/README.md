@@ -35,11 +35,11 @@ Rewrite and benchmark the complete center model:
 .venv-onnx-win/Scripts/python.exe tools/onnx_windows_runtime_probe.py `
   --model artifacts/eventmamba_center_selective_scan_cuda.onnx `
   --provider CUDAExecutionProvider `
-  --custom-op-library native/selective_scan_ort/build/vs174_mismatch/eventmamba_selective_scan.dll `
+  --custom-op-library native/selective_scan_ort/bin/eventmamba_selective_scan.dll `
   --sample artifacts/real_raw_sample.npz `
   --repeats 10
 ```
 
 The build script downloads only the two official ONNX Runtime 1.27 headers into
-the ignored `.native-cache` directory. Generated models, DLLs, and build files
-are also ignored.
+the ignored `.native-cache` directory. Intermediate build files remain ignored;
+the verified runtime DLL is copied to `native/selective_scan_ort/bin/`.

@@ -43,6 +43,7 @@ a = Analysis(
         (str(project_root / 'backend'), 'backend'),
         (str(project_root / 'libs'), 'libs'),
         (str(project_root / 'linux_backend.py'), '.'),
+        (str(project_root / 'windows_backend.py'), '.'),
     ],
     hiddenimports=[],
     hookspath=[],

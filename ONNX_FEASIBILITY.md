@@ -2,9 +2,9 @@
 
 ## 当前结论
 
-中心点模型已经完成 Windows 原生 ONNX Runtime CPU/GPU 验证，并成功用自定义 CUDA 算子替换 6 个 selective-scan `Loop`。真实 RAW 样本的完整 GPU 推理从约 `6.65 s` 降至约 `18.4 ms`，输出仍与原 WSL/PyTorch 模型数值一致。
+中心点和椭圆模型均已完成 Windows 原生 ONNX Runtime GPU 验证，并成功用同一个自定义 CUDA 算子替换各自的 6 个 selective-scan `Loop`。中心点真实 RAW 样本的完整 GPU 推理约 `18.4 ms`；椭圆模型纯 ONNX GPU 推理约 `16.58 ms`。
 
-因此，发布版取消用户侧 WSL、PyTorch 和 `mamba-ssm` 依赖在技术上可行。尚未完成的是椭圆模型转换、Qt 后端接入、CUDA 运行库打包以及不同 NVIDIA 显卡的兼容测试。
+因此，中心点和椭圆推理均不再需要用户侧 WSL、PyTorch 或 `mamba-ssm`。两种模式都已经接入 Qt 的 Windows 后端；尚未完成的是 CUDA 运行库打包以及不同 NVIDIA 显卡的兼容测试。
 
 ## 验证链路
 
@@ -84,13 +84,27 @@ Windows 隔离环境使用 Python 3.13、ONNX Runtime GPU 1.27。修正 9 个旧
 - `tools/onnx_fix_topk_k.py`
 - `tools/extract_raw_inference_sample.py`
 - `tools/onnx_saved_input_reference_probe.py`
+- `tools/onnx_export_ellipse.py`
+- `tools/onnx_exportable_eventmamba.py`
+- `tools/onnx_ellipse_windows_probe.py`
+
+### 5. 椭圆模型 Windows 结果
+
+椭圆模型使用 `checkpoint/v14_new/P3best_checkpoint.pth` 和 `matrix_A.pt`，导出为 1024 维 VSA 输出的 ONNX 模型。`matrix_A` 单独转换为 NumPy 文件，运行时不需要 PyTorch。
+
+- Windows CUDA 原始 1024 维输出最大绝对误差：`5.52e-05`
+- 五参数解码最大绝对误差：`4.13e-05`
+- PyTorch 与 NumPy VSA 解码最大绝对误差：`1.19e-07`
+- `allclose(rtol=1e-3, atol=1e-4)`：通过
+- 纯 ONNX GPU 10 次平均：`16.58 ms`
+- Qt、ZMQ、FPS 与 GPU 完整链路预热后平均：`46.84 ms`
+- 输出顺序：`[x, y, a, b, angle]`
 
 ONNX、NPZ、编译产物、依赖头文件和运行库缓存均位于已忽略目录，不会被误提交。
 
 ## 后续工作
 
 1. 将完整 8 输入 `SelectiveScan` 节点直接写入导出图，避免目前保留的 `delta_a`、`delta_b_u` 中间大张量。
-2. 将相同转换应用到椭圆模型，并验证 `matrix_A` 解码。
-3. 把 FPS、ONNX Runtime 会话和自定义算子 DLL 接入 Qt 后端。
-4. 发布时统一 CUDA Toolkit/运行库版本，补测其他 NVIDIA 架构和无 NVIDIA GPU 的 CPU 回退策略。
-5. 完成 Windows 安装包后再移除正式产品中的 WSL 调用链。
+2. 发布时统一 CUDA Toolkit/运行库版本，补测其他 NVIDIA 架构和无 NVIDIA GPU 的 CPU 回退策略。
+3. 将 ONNX 模型、`matrix_A.npy`、自定义算子和运行库纳入 Windows 安装包。
+4. 完成安装包回归后，从正式产品中移除 WSL 调用链。

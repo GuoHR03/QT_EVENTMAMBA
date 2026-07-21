@@ -1,6 +1,6 @@
 [project]
 name = "ui-event"
-version = "0.1.0"
+version = "0.2.0"
 description = "PyQt6 event camera visualization and EventMamba inference UI."
 requires-python = ">=3.8"
 dependencies = [
@@ -35,4 +35,5 @@ files = [
     "app/choose_windows.py",
     "app/choose_form.ui",
     "linux_backend.py",
+    "windows_backend.py",
 ]
