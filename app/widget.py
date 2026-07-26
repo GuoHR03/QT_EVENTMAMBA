@@ -3,8 +3,10 @@ import traceback
 
 try:
     from .bootstrap import app_resource_path, configure_runtime
+    from .runtime_smoke import runtime_smoke_exit_code
 except ImportError:
     from bootstrap import app_resource_path, configure_runtime
+    from runtime_smoke import runtime_smoke_exit_code
 
 configure_runtime(__file__)
 
@@ -1018,6 +1020,10 @@ def _format_playback_time_us(timestamp_us):
 
 
 def main():
+    smoke_exit_code = runtime_smoke_exit_code()
+    if smoke_exit_code is not None:
+        sys.exit(smoke_exit_code)
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     window = MainWindow()

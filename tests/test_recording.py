@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import backend.recording as recording_module
 from backend.recording import RawRecorder
 
 
@@ -30,6 +33,25 @@ def test_raw_recorder_starts_with_timestamped_filename():
     assert started
     assert recorder.is_recording
     assert stream.started_path == "recording_20260623_120000.raw"
+
+
+def test_frozen_raw_recorder_uses_writable_user_directory(tmp_path, monkeypatch):
+    stream = FakeEventsStream()
+    monkeypatch.setattr(recording_module.sys, "frozen", True, raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    recorder = RawRecorder(clock=lambda _: "20260623_120000")
+
+    assert recorder.start(FakeDevice(stream))
+
+    expected_path = (
+        tmp_path
+        / "LocalAppData"
+        / "UI_Event"
+        / "record"
+        / "recording_20260623_120000.raw"
+    )
+    assert Path(stream.started_path) == expected_path
+    assert expected_path.parent.is_dir()
 
 
 def test_raw_recorder_stops_stream():

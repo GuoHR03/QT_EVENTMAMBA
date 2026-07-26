@@ -24,7 +24,7 @@ def is_conflicting_libexpat(entry):
 
 a = Analysis(
     [str(app_dir / 'widget.py')],
-    pathex=[str(project_root), str(app_dir)],
+    pathex=[str(project_root), str(app_dir), str(project_root / 'libs')],
     binaries=(
         optional_binary('ffi.dll')
         + optional_binary('libbz2.dll')
@@ -45,7 +45,15 @@ a = Analysis(
         (str(project_root / 'linux_backend.py'), '.'),
         (str(project_root / 'windows_backend.py'), '.'),
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        'metavision_core.event_io',
+        'metavision_sdk_base',
+        'metavision_sdk_core',
+        'metavision_sdk_cv',
+        'metavision_hal',
+        'dv_processing',
+        'h5py',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -68,9 +76,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='UI_Event',
     debug=False,
     bootloader_ignore_signals=False,
@@ -84,4 +91,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='UI_Event',
 )

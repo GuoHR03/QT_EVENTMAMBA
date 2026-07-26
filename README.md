@@ -1,6 +1,6 @@
 # UI_Event
 
-基于 PyQt6 的事件相机可视化与 EventMamba 推理工具，支持实时相机采集、离线文件回放、ROI 设置、去噪配置、Windows 原生 ONNX/CUDA 推理，以及预测结果叠加显示。WSL 后端保留为兼容选项。
+基于 PyQt6 的事件相机可视化与 EventMamba 推理工具，支持实时相机采集、离线文件回放、ROI 设置、去噪配置、Windows 原生 ONNX/CUDA 推理，以及预测结果叠加显示。0.2.0 发布包使用 Windows 原生独立后端，不需要 WSL 或目标机 Python；WSL 后端仅作为源码兼容选项保留。
 
 ## 当前状态
 
@@ -29,7 +29,8 @@
 - 运行日志按信息、成功、警告和错误分色，输入状态会在首帧后显示实际分辨率
 - 前端与后端通过 ZeroMQ 通信
 - 默认由 Windows 端同时负责 UI、相机、显示和 ONNX/CUDA 模型推理
-- 可通过环境变量显式切换到原有 WSL 推理后端
+- Windows 安装版内置独立的 `backend_runtime/UI_Event_Backend.exe`、模型和推理运行库
+- 源码运行时仍可通过环境变量显式切换到原有 WSL 推理后端
 
 ## 功能介绍
 
@@ -66,7 +67,7 @@
 - 设置 `EVENTMAMBA_INFERENCE_RUNTIME=wsl` 后仍可使用原有 PyTorch 模型作为兼容或对照后端。
 - 网络实现通过 `PredictorRegistry` 按模式注册；模型加载、输入推理和输出解码封装在独立 Predictor 中。
 - 更换同输入输出的网络时，只需实现 Predictor 并更新注册项，不需要修改事件读取、20ms 切片或请求处理主流程。
-- Windows UI 通过 ZeroMQ 调用独立的 Windows Python 进程；该进程使用 ONNX Runtime CUDA 和自定义 `selective_scan` CUDA 算子完成 EventMamba 推理。
+- Windows UI 通过 ZeroMQ 调用独立推理进程；源码模式使用独立 Python 环境，安装版使用冻结后的 `UI_Event_Backend.exe`。该进程通过 ONNX Runtime CUDA 和自定义 `selective_scan` CUDA 算子完成 EventMamba 推理。
 - 推理结果携带事件时间戳，UI 按时间匹配图像帧后叠加绘制，降低结果和画面错位。
 
 ## 项目结构
@@ -76,6 +77,9 @@ UI_Event/
 ├── main.py
 ├── linux_backend.py
 ├── windows_backend.py
+├── UI_Event.spec             # UI onedir 打包配置
+├── UI_Event_Backend.spec     # Windows 推理后端 onedir 打包配置
+├── installer.iss             # Inno Setup 安装器配置
 ├── app/
 │   ├── widget.py              # 主窗口协调
 │   ├── controller.py          # UI 到后端的控制层
@@ -137,6 +141,8 @@ UI_Event/
 
 ## 运行方式
 
+### 源码运行
+
 建议从项目根目录启动：
 
 ```bash
@@ -145,7 +151,27 @@ python main.py
 
 QtCreator 中也建议将启动脚本设置为 `main.py`。
 
+### Windows 发布版
+
+构建完整便携目录：
+
+```powershell
+.\scripts\build_installer.ps1 -Clean -SkipInstaller
+```
+
+启动文件为 `dist/UI_Event/UI_Event.exe`。必须整体保留 `dist/UI_Event/`，不能单独复制 EXE。
+
+构建安装程序：
+
+```powershell
+.\scripts\build_installer.ps1 -Clean
+```
+
+安装包输出为 `installer/UI_Event_Setup.exe`。完整目录结构、构建依赖和干净电脑验收项目见 [PACKAGING.md](PACKAGING.md)。
+
 ## 环境要求
+
+源码开发环境：
 
 - Windows 10/11
 - UI Python 3.8+
@@ -157,13 +183,16 @@ QtCreator 中也建议将启动脚本设置为 `main.py`。
 - ONNX Runtime GPU、CUDA 与 cuDNN 运行库
 - Metavision SDK
 
-只有在使用兼容后端时才需要 WSL2、PyTorch、Mamba 及其 Linux 环境。
+0.2.0 安装版已携带 Python 冻结运行时、ONNX Runtime、构建时收集的 CUDA/cuDNN DLL、模型、自定义算子和 Metavision 用户态运行库。目标电脑不需要安装 Python、WSL、CUDA Toolkit、cuDNN 或完整 Metavision SDK，但仍需要兼容的 NVIDIA GPU/驱动、Microsoft Visual C++ 2015–2022 x64 Runtime，以及实时相机所需的 Metavision 设备驱动。
+
+只有在源码模式使用兼容后端时才需要 WSL2、PyTorch、Mamba 及其 Linux 环境。默认安装器不会安装或修改 WSL。
 
 ## 环境变量
 
 ```text
 EVENTMAMBA_INFERENCE_RUNTIME=windows
 EVENTMAMBA_WINDOWS_PYTHON=.venv-onnx-win/Scripts/python.exe
+EVENTMAMBA_WINDOWS_BACKEND_EXECUTABLE=backend_runtime/UI_Event_Backend.exe
 EVENTMAMBA_CENTER_ONNX_MODEL=artifacts/eventmamba_center_selective_scan_cuda.onnx
 EVENTMAMBA_ELLIPSE_ONNX_MODEL=artifacts/eventmamba_ellipse_selective_scan_cuda.onnx
 EVENTMAMBA_ELLIPSE_MATRIX=artifacts/eventmamba_ellipse_matrix_A.npy
@@ -172,7 +201,7 @@ EVENTMAMBA_BACKEND_READY_TIMEOUT_S=180
 METAVISION_SDK_PATH=E:\Metavision\Prophesee
 ```
 
-Windows 是默认值，因此通常不需要设置第一项。兼容 WSL 后端可使用：
+Windows 是默认值，因此通常不需要设置第一项。`EVENTMAMBA_WINDOWS_PYTHON` 仅用于源码模式；冻结版会直接启动 `EVENTMAMBA_WINDOWS_BACKEND_EXECUTABLE` 指向的程序，其默认值为安装根目录中的 `backend_runtime/UI_Event_Backend.exe`。源码兼容的 WSL 后端可使用：
 
 ```text
 EVENTMAMBA_INFERENCE_RUNTIME=wsl
@@ -191,7 +220,7 @@ artifacts/eventmamba_ellipse_matrix_A.npy
 native/selective_scan_ort/bin/eventmamba_selective_scan.dll
 ```
 
-WSL 的 `ellipse` 模式仍需要权重文件同目录下存在 `matrix_A.pt`：
+0.2.0 构建脚本会把这四项复制到发布根目录中的相同相对路径，并在生成安装器前检查其存在性。WSL 源码兼容模式的 `ellipse` 仍需要权重文件同目录下存在 `matrix_A.pt`：
 
 ```text
 checkpoint/
@@ -205,6 +234,8 @@ checkpoint/
 - `build/`、`dist/`、`installer/` 是构建产物，可以重新生成
 - `__pycache__/` 是 Python 缓存，可以删除
 - `eventmamba_backend.log` 是运行日志，可以删除
+- 安装版录像和日志写入 `%LOCALAPPDATA%\UI_Event`，卸载程序不会删除用户数据
 - 主程序不再依赖训练脚本，训练/实验脚本不应混入主运行链路
+- Windows 安装器不再携带或自动导入 WSL；手动 WSL 脚本仅供源码兼容流程使用
 - 源码和文档统一使用 UTF-8 编码；如果 PowerShell 显示中文乱码，请用 `Get-Content -Encoding UTF8` 查看
 - 当前 RAW 显示窗口与推理窗口已经拆分：显示按 `fps / accumulation time` 驱动，推理继续按 `DEFAULT_NN_INTERVAL_MS` 切片。

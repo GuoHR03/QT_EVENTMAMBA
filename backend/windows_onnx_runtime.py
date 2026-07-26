@@ -30,9 +30,18 @@ def prepare_windows_cuda_runtime():
     ) / "bin"
 
     loaded_directories = []
-    for directory in (cuda_directory, cudnn_directory, cuda_12_directory):
+    for directory in (
+        site_packages,
+        cuda_directory,
+        cudnn_directory,
+        cuda_12_directory,
+    ):
         if _add_dll_directory(directory):
             loaded_directories.append(str(directory))
+
+    bundled_cuda_12_runtime = site_packages / "cudart64_12.dll"
+    if bundled_cuda_12_runtime.is_file():
+        _DLL_HANDLES.append(ctypes.WinDLL(str(bundled_cuda_12_runtime)))
 
     if not cuda_directory.is_dir() or not cudnn_directory.is_dir():
         ort.preload_dlls(directory="")

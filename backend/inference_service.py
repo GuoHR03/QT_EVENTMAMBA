@@ -1,8 +1,8 @@
 import os
+import sys
 
 from backend.backend_healthcheck import wait_for_backend_ready_with_log
 from backend.inference_runtime import default_backend_log_path, read_float_env, runtime_root_dir, to_wsl_path
-from backend.NetworkThread import NetworkThread
 from backend.settings import (
     DEFAULT_BACKEND_READY_TIMEOUT_S,
     DEFAULT_CENTER_ONNX_MODEL,
@@ -14,6 +14,7 @@ from backend.settings import (
     DEFAULT_LINUX_PYTHON,
     DEFAULT_NETWORK_TIMEOUT_MS,
     DEFAULT_SELECTIVE_SCAN_DLL,
+    DEFAULT_WINDOWS_BACKEND_EXECUTABLE,
     DEFAULT_WINDOWS_PYTHON,
     DEFAULT_WSL_DISTRO,
     ENV_BACKEND_READY_TIMEOUT_S,
@@ -23,10 +24,15 @@ from backend.settings import (
     ENV_INFERENCE_RUNTIME,
     ENV_LINUX_PYTHON,
     ENV_SELECTIVE_SCAN_DLL,
+    ENV_WINDOWS_BACKEND_EXECUTABLE,
     ENV_WINDOWS_PYTHON,
     ENV_WSL_DISTRO,
 )
-from backend.windows_process import WindowsBackendProcess, build_windows_backend_command
+from backend.windows_process import (
+    WindowsBackendProcess,
+    build_windows_backend_command,
+    build_windows_backend_executable_command,
+)
 from backend.wsl_process import WslBackendProcess, build_backend_command
 
 
@@ -49,6 +55,10 @@ class InferenceService:
         self.linux_python = os.environ.get(ENV_LINUX_PYTHON, DEFAULT_LINUX_PYTHON)
         self.windows_python = os.environ.get(
             ENV_WINDOWS_PYTHON, DEFAULT_WINDOWS_PYTHON
+        )
+        self.windows_backend_executable = os.environ.get(
+            ENV_WINDOWS_BACKEND_EXECUTABLE,
+            DEFAULT_WINDOWS_BACKEND_EXECUTABLE,
         )
         self.center_onnx_model = os.environ.get(
             ENV_CENTER_ONNX_MODEL, DEFAULT_CENTER_ONNX_MODEL
@@ -127,6 +137,8 @@ class InferenceService:
             raise
 
         if self.network_thread is None or not self.network_thread.isRunning():
+            from backend.NetworkThread import NetworkThread
+
             self.network_thread = NetworkThread(
                 self.frame_queue,
                 host=host,
@@ -165,8 +177,6 @@ class InferenceService:
         prediction_mode,
         port,
     ):
-        python_executable = self._resolve_windows_path(self.windows_python, project_dir)
-        backend_script = os.path.join(project_dir, "windows_backend.py")
         center_model_path = self._resolve_windows_path(
             self.center_onnx_model,
             project_dir,
@@ -178,7 +188,7 @@ class InferenceService:
         selected_path = str(weights_path)
         selected_name = os.path.basename(selected_path).lower()
         if selected_path.lower().endswith(".onnx"):
-            selected_path = os.path.abspath(selected_path)
+            selected_path = self._resolve_windows_path(selected_path, project_dir)
             if "ellipse" in selected_name:
                 ellipse_model_path = selected_path
             elif "center" in selected_name:
@@ -196,13 +206,31 @@ class InferenceService:
             project_dir,
         )
         required = {
-            "Windows Python": python_executable,
-            "Windows backend": backend_script,
             "center ONNX model": center_model_path,
             "ellipse ONNX model": ellipse_model_path,
             "ellipse matrix_A": ellipse_matrix_path,
             "selective scan CUDA DLL": custom_op_library,
         }
+        if self._is_frozen_ui():
+            backend_executable = self._resolve_windows_path(
+                self.windows_backend_executable,
+                project_dir,
+            )
+            required = {
+                "Windows backend executable": backend_executable,
+                **required,
+            }
+        else:
+            python_executable = self._resolve_windows_path(
+                self.windows_python,
+                project_dir,
+            )
+            backend_script = os.path.join(project_dir, "windows_backend.py")
+            required = {
+                "Windows Python": python_executable,
+                "Windows backend script": backend_script,
+                **required,
+            }
         missing = [
             f"{label}: {path}"
             for label, path in required.items()
@@ -215,6 +243,16 @@ class InferenceService:
         self.active_model_path = (
             ellipse_model_path if prediction_mode == "ellipse" else center_model_path
         )
+        if self._is_frozen_ui():
+            return build_windows_backend_executable_command(
+                backend_executable,
+                center_model_path,
+                ellipse_model_path,
+                ellipse_matrix_path,
+                custom_op_library,
+                prediction_mode,
+                port,
+            )
         return build_windows_backend_command(
             python_executable,
             backend_script,
@@ -225,6 +263,10 @@ class InferenceService:
             prediction_mode,
             port,
         )
+
+    @staticmethod
+    def _is_frozen_ui():
+        return bool(getattr(sys, "frozen", False))
 
     @staticmethod
     def _resolve_windows_path(path, project_dir):

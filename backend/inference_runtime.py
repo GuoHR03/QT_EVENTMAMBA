@@ -23,13 +23,30 @@ def to_wsl_path(path, wsl_distro="EventMamba_mini"):
     return path
 
 
-def runtime_root_dir(module_file, frozen=None, meipass=None):
+def runtime_resource_dir(module_file, frozen=None, meipass=None):
     if frozen is None:
         frozen = getattr(sys, "frozen", False)
     if meipass is None:
         meipass = getattr(sys, "_MEIPASS", None)
     if frozen and meipass:
-        return meipass
+        return os.path.abspath(meipass)
+
+    current_dir = os.path.dirname(os.path.abspath(module_file))
+    return os.path.dirname(current_dir)
+
+
+def runtime_root_dir(module_file, frozen=None, meipass=None, executable=None):
+    """Return the stable root used for installed runtime files."""
+    if frozen is None:
+        frozen = getattr(sys, "frozen", False)
+    if frozen:
+        executable = executable or sys.executable
+        if executable:
+            return os.path.dirname(os.path.abspath(executable))
+        if meipass is None:
+            meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return os.path.abspath(meipass)
 
     current_dir = os.path.dirname(os.path.abspath(module_file))
     return os.path.dirname(current_dir)

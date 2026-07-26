@@ -2,6 +2,30 @@ import os
 import subprocess
 
 
+def _windows_backend_arguments(
+    center_model_path,
+    ellipse_model_path,
+    ellipse_matrix_path,
+    custom_op_library,
+    initial_mode,
+    port,
+):
+    return [
+        "--center-model",
+        center_model_path,
+        "--ellipse-model",
+        ellipse_model_path,
+        "--ellipse-matrix",
+        ellipse_matrix_path,
+        "--custom-op-library",
+        custom_op_library,
+        "--initial-mode",
+        initial_mode,
+        "--port",
+        str(port),
+    ]
+
+
 def build_windows_backend_command(
     python_executable,
     backend_script,
@@ -15,18 +39,36 @@ def build_windows_backend_command(
     return [
         python_executable,
         backend_script,
-        "--center-model",
-        center_model_path,
-        "--ellipse-model",
-        ellipse_model_path,
-        "--ellipse-matrix",
-        ellipse_matrix_path,
-        "--custom-op-library",
-        custom_op_library,
-        "--initial-mode",
-        initial_mode,
-        "--port",
-        str(port),
+        *_windows_backend_arguments(
+            center_model_path,
+            ellipse_model_path,
+            ellipse_matrix_path,
+            custom_op_library,
+            initial_mode,
+            port,
+        ),
+    ]
+
+
+def build_windows_backend_executable_command(
+    backend_executable,
+    center_model_path,
+    ellipse_model_path,
+    ellipse_matrix_path,
+    custom_op_library,
+    initial_mode,
+    port,
+):
+    return [
+        backend_executable,
+        *_windows_backend_arguments(
+            center_model_path,
+            ellipse_model_path,
+            ellipse_matrix_path,
+            custom_op_library,
+            initial_mode,
+            port,
+        ),
     ]
 
 

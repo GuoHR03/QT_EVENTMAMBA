@@ -46,6 +46,7 @@ onnxruntime_profile__*.json
 *.spec
 *.iss
 !UI_Event.spec
+!UI_Event_Backend.spec
 !installer.iss
 
 # Helper scripts kept in source
