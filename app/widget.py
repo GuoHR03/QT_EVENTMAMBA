@@ -10,7 +10,16 @@ configure_runtime(__file__)
 
 from PyQt6 import uic
 from PyQt6.QtCore import QSize, QTimer, Qt
-from PyQt6.QtGui import QColor, QImage, QPixmap, QTextCharFormat, QTextCursor
+from PyQt6.QtGui import (
+    QColor,
+    QIcon,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -82,7 +91,6 @@ class MainWindow(QWidget):
         super().__init__()
         uic.loadUi(app_resource_path("form.ui"), self)
         self.settings = AppSettings()
-        self._compact_startup_pending = True
         self._init_workspace_ui()
         apply_app_theme(self)
         self._set_initial_window_geometry()
@@ -110,16 +118,19 @@ class MainWindow(QWidget):
         )
 
     def _set_initial_window_geometry(self):
-        """Choose a comfortable, centered size without occupying the screen."""
-        self.setMinimumSize(860, 600)
+        """Choose a compact 3:2 workspace instead of mirroring a wide screen."""
+        self.setMinimumSize(900, 620)
         screen = QApplication.primaryScreen()
         if screen is None:
-            self.resize(1100, 700)
+            self.resize(1050, 700)
             return
 
         available = screen.availableGeometry()
-        width = min(1180, max(900, int(available.width() * 0.72)))
-        height = min(760, max(620, int(available.height() * 0.72)))
+        height = min(760, max(650, int(available.height() * 0.72)))
+        # Derive width from height so a 16:9 monitor does not produce an
+        # unnecessarily wide application window. The 3:2 shell still leaves
+        # enough room for the 250 px settings panel when it is opened.
+        width = min(1140, max(975, int(height * 1.5)))
         width = min(width, available.width())
         height = min(height, available.height())
         self.resize(width, height)
@@ -199,6 +210,17 @@ class MainWindow(QWidget):
         progress_layout.setSpacing(10)
         progress_layout.addWidget(self.playback_progress_slider, 1)
         progress_layout.addWidget(self.playback_time_label)
+
+        self.settings_panel_button = QPushButton(self.playback_progress_widget)
+        self.settings_panel_button.setObjectName("settings_panel_button")
+        self.settings_panel_button.setCheckable(True)
+        self.settings_panel_button.setFixedSize(42, 42)
+        self.settings_panel_button.setIcon(self._create_settings_panel_icon())
+        self.settings_panel_button.setIconSize(QSize(22, 22))
+        self.settings_panel_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_panel_button.setToolTip("展开右侧设置面板")
+        self.settings_panel_button.setAccessibleName("显示或隐藏右侧设置面板")
+        progress_layout.addWidget(self.settings_panel_button)
         viewer_layout.addWidget(
             self.playback_progress_widget,
             0,
@@ -257,7 +279,9 @@ class MainWindow(QWidget):
 
         self.palette_combo_box.setToolTip("选择事件极性的显示配色")
         self.replay_speed_combo_box.setToolTip("调整离线文件的回放速度")
-        self.fps_spin_box.setToolTip("显示帧率，同时决定事件帧累计时间")
+        self.fps_spin_box.setToolTip(
+            "控制画面帧率和每帧事件累计时间，不影响模型的 20 ms 推理窗口"
+        )
         self.roi_window_button.setToolTip("配置 ROI、预测模式和事件去噪")
         self.record_button.setText("录制 RAW")
         self.record_button.setToolTip("仅实时相机支持录制 RAW 数据")
@@ -289,6 +313,8 @@ class MainWindow(QWidget):
             layout.setContentsMargins(12, 18, 12, 12)
 
         self._init_control_panel_accordion()
+        self._control_panel_visible = False
+        self.control_panel_scroll_area.setVisible(False)
 
     def _build_logical_control_groups(self):
         """Regroup existing controls by workflow without replacing their signals."""
@@ -341,15 +367,16 @@ class MainWindow(QWidget):
         source_layout.addWidget(self.select_input_file_button)
 
         self.playback_group_box = QGroupBox(self.control_panel_widget)
-        playback_layout = QVBoxLayout(self.playback_group_box)
+        playback_layout = QGridLayout(self.playback_group_box)
         playback_layout.setContentsMargins(12, 12, 12, 12)
-        playback_layout.setSpacing(8)
-        speed_layout = QHBoxLayout()
-        speed_layout.setSpacing(10)
-        speed_layout.addWidget(self.speed_text_label)
-        speed_layout.addWidget(self.replay_speed_combo_box, 1)
-        playback_layout.addLayout(speed_layout)
-        playback_layout.addWidget(self.start_camera_button)
+        playback_layout.setHorizontalSpacing(10)
+        playback_layout.setVerticalSpacing(8)
+        playback_layout.addWidget(self.speed_text_label, 0, 0)
+        playback_layout.addWidget(self.replay_speed_combo_box, 0, 1)
+        playback_layout.addWidget(self.fps_text_label, 1, 0)
+        playback_layout.addWidget(self.fps_spin_box, 1, 1)
+        playback_layout.addWidget(self.start_camera_button, 2, 0, 1, 2)
+        playback_layout.setColumnStretch(1, 1)
 
         self.recording_group_box = QGroupBox(self.control_panel_widget)
         recording_layout = QVBoxLayout(self.recording_group_box)
@@ -375,6 +402,18 @@ class MainWindow(QWidget):
         mode_layout.addWidget(self.roi_settings_editor.eli_radioButton)
         mode_layout.addStretch(1)
 
+        self.model_prediction_group_box = QGroupBox(self.control_panel_widget)
+        model_prediction_layout = QVBoxLayout(self.model_prediction_group_box)
+        model_prediction_layout.setContentsMargins(10, 8, 10, 10)
+        model_prediction_layout.setSpacing(8)
+        for group_box, title in (
+            (self.prediction_mode_group_box, "预测模式"),
+            (self.inference_group_box, "模型管理"),
+        ):
+            group_box.setTitle(title)
+            group_box.setProperty("uiRole", "controlSubsection")
+            model_prediction_layout.addWidget(group_box)
+
         self.processing_group_box = QGroupBox(self.control_panel_widget)
         processing_layout = QGridLayout(self.processing_group_box)
         processing_layout.setContentsMargins(12, 12, 12, 12)
@@ -386,8 +425,6 @@ class MainWindow(QWidget):
         processing_layout.addWidget(self.roi_settings_editor.noise_filter_combo_box, 0, 1)
         processing_layout.addWidget(threshold_label, 1, 0)
         processing_layout.addWidget(self.roi_settings_editor.noise_threshold_spin_box, 1, 1)
-        processing_layout.addWidget(self.fps_text_label, 2, 0)
-        processing_layout.addWidget(self.fps_spin_box, 2, 1)
         processing_layout.setColumnStretch(1, 1)
 
         self.display_group_box = QGroupBox(self.control_panel_widget)
@@ -415,17 +452,27 @@ class MainWindow(QWidget):
         roi_layout.addWidget(self.roi_settings_editor.select_roi_button, 5, 0, 1, 2)
         roi_layout.setColumnStretch(1, 1)
 
+        self.playback_display_roi_group_box = QGroupBox(self.control_panel_widget)
+        view_controls_layout = QVBoxLayout(self.playback_display_roi_group_box)
+        view_controls_layout.setContentsMargins(10, 8, 10, 10)
+        view_controls_layout.setSpacing(8)
+        for group_box, title in (
+            (self.playback_group_box, "播放控制"),
+            (self.display_group_box, "显示设置"),
+            (self.roi_group_box, "ROI 区域"),
+        ):
+            group_box.setTitle(title)
+            group_box.setProperty("uiRole", "controlSubsection")
+            view_controls_layout.addWidget(group_box)
+
     def _init_control_panel_accordion(self):
         """Turn the existing control groups into a compact accordion."""
         sections = (
             (self.source_group_box, "数据源"),
-            (self.playback_group_box, "播放控制"),
+            (self.playback_display_roi_group_box, "播放、显示与 ROI"),
             (self.recording_group_box, "数据录制"),
-            (self.inference_group_box, "模型管理"),
-            (self.prediction_mode_group_box, "预测模式"),
-            (self.processing_group_box, "事件预处理"),
-            (self.display_group_box, "显示设置"),
-            (self.roi_group_box, "ROI 区域"),
+            (self.model_prediction_group_box, "模型与预测"),
+            (self.processing_group_box, "去噪"),
         )
         self._control_accordion_sections = []
 
@@ -510,6 +557,38 @@ class MainWindow(QWidget):
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         return label
 
+    @staticmethod
+    def _create_settings_panel_icon():
+        """Draw a small sliders icon without relying on an external asset."""
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(QColor("#ffffff"), 2))
+        painter.setBrush(QColor("#ffffff"))
+        for y, knob_x in ((6, 15), (12, 9), (18, 14)):
+            painter.drawLine(3, y, 21, y)
+            painter.drawEllipse(knob_x - 2, y - 2, 4, 4)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _set_control_panel_visible(self, visible):
+        visible = bool(visible)
+        self._control_panel_visible = visible
+        self.control_panel_scroll_area.setVisible(visible)
+
+        if self.settings_panel_button.isChecked() != visible:
+            self.settings_panel_button.blockSignals(True)
+            self.settings_panel_button.setChecked(visible)
+            self.settings_panel_button.blockSignals(False)
+        self.settings_panel_button.setToolTip(
+            "收起右侧设置面板" if visible else "展开右侧设置面板"
+        )
+
+        self.content_horizontal_layout.activate()
+        QTimer.singleShot(0, self._fit_event_view)
+        QTimer.singleShot(0, self._elide_input_file_name)
+
     def _connect_signals(self):
         self.start_camera_button.clicked.connect(self.toggle_camera)
         self.record_button.clicked.connect(self.toggle_recording)
@@ -529,6 +608,7 @@ class MainWindow(QWidget):
         self.playback_progress_slider.sliderReleased.connect(self._finish_progress_drag)
         self.clear_log_button.clicked.connect(self.log_text_edit.clear)
         self.log_toggle_button.clicked.connect(self._toggle_log_panel)
+        self.settings_panel_button.toggled.connect(self._set_control_panel_visible)
         self.controller.connect_view(
             self._display_image_with_prediction,
             self.append_log,
@@ -612,8 +692,15 @@ class MainWindow(QWidget):
         self.log_text_edit.setVisible(not self._log_collapsed)
         self.log_toggle_button.setText("展开" if self._log_collapsed else "收起")
         if self._log_collapsed:
-            self.log_group_box.setMaximumHeight(48)
+            # Let Qt account for the active font, DPI scaling, group-box
+            # stylesheet margin and layout margins. A fixed 48 px height leaves
+            # too little room for the header on some Windows display scales and
+            # clips the lower part of Chinese glyphs.
+            self.log_group_layout.activate()
+            collapsed_height = self.log_group_box.minimumSizeHint().height()
+            self.log_group_box.setFixedHeight(collapsed_height)
         else:
+            self.log_group_box.setMinimumHeight(0)
             self.log_group_box.setMaximumHeight(16777215)
         self.log_group_box.updateGeometry()
         QTimer.singleShot(0, self._fit_event_view)
@@ -680,6 +767,12 @@ class MainWindow(QWidget):
         if hasattr(self, "input_file_label"):
             QTimer.singleShot(0, self._elide_input_file_name)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Refit after the first real layout pass. Before show(), Qt reports
+        # small placeholder sizes for widgets whose sidebar is hidden.
+        QTimer.singleShot(0, self._fit_event_view)
+
     def _elide_input_file_name(self):
         if not hasattr(self, "_input_file_display_name"):
             return
@@ -697,30 +790,17 @@ class MainWindow(QWidget):
         available = self.camera_viewport_widget.contentsRect().size()
         if available.width() <= 0 or available.height() <= 0:
             return
+        # During the first layout pass Qt can briefly report the viewport at
+        # only a few pixels. Do not lock the image and aligned controls to that
+        # transient size; wait until the real window geometry is available.
+        if available.width() < 320 or available.height() < 180:
+            return
 
-        # Use a widescreen placeholder before the first frame arrives. Once a
-        # source is active, its real resolution replaces this fallback.
-        source_width, source_height = self._last_frame_size or (1280, 720)
-        aspect_ratio = source_width / max(1, source_height)
-        target_width = min(available.width(), int(available.height() * aspect_ratio))
-        target_height = min(available.height(), int(target_width / aspect_ratio))
-        target_width = max(1, target_width)
-        target_height = max(1, target_height)
-
-        if self._compact_startup_pending and self.isVisible():
-            self._compact_startup_pending = False
-            horizontal_surplus = available.width() - target_width
-            if horizontal_surplus > 24 and not self.isMaximized():
-                compact_width = max(
-                    self.minimumWidth(),
-                    self.width() - horizontal_surplus,
-                )
-                window_center = self.frameGeometry().center()
-                self.resize(compact_width, self.height())
-                compact_geometry = self.frameGeometry()
-                compact_geometry.moveCenter(window_center)
-                self.move(compact_geometry.topLeft())
-                return
+        # The black canvas fills the workspace. Actual frames are still scaled
+        # with KeepAspectRatio in _display_image_with_prediction(), so a 16:9
+        # source is never stretched even when the surrounding UI is wider.
+        target_width = max(1, available.width())
+        target_height = max(1, available.height())
 
         if self.camera_image_label.size() != QSize(target_width, target_height):
             self.camera_image_label.setFixedSize(target_width, target_height)

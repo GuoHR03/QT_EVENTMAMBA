@@ -42,9 +42,14 @@ QWidget#control_panel_widget {
     background: transparent;
 }
 
-QScrollArea#control_panel_scroll_area,
+QScrollArea#control_panel_scroll_area {
+    background: #ffffff;
+    border: 1px solid #d7dce3;
+    border-radius: 7px;
+}
+
 QScrollArea#control_panel_scroll_area > QWidget > QWidget {
-    background: transparent;
+    background: #ffffff;
     border: none;
 }
 
@@ -124,6 +129,22 @@ QGroupBox[uiRole="accordionContent"] {
     border-bottom: 1px solid #d7dce3;
     border-radius: 0;
     margin-top: 0;
+}
+
+QGroupBox[uiRole="controlSubsection"] {
+    background: #f8fafc;
+    border: 1px solid #dce3ec;
+    border-radius: 6px;
+    margin-top: 18px;
+}
+
+QGroupBox[uiRole="controlSubsection"]::title {
+    subcontrol-origin: margin;
+    left: 9px;
+    padding: 0 5px;
+    color: #526174;
+    font-size: 12px;
+    font-weight: 600;
 }
 
 QLabel#viewer_title_label,
@@ -225,6 +246,28 @@ QPushButton:disabled {
     background: #e8edf3;
     color: #94a3b8;
     border-color: #d7dee8;
+}
+
+QPushButton#settings_panel_button {
+    background: #4383ce;
+    border: 1px solid #4383ce;
+    border-radius: 7px;
+    padding: 0;
+    min-width: 40px;
+    max-width: 42px;
+    min-height: 40px;
+    max-height: 42px;
+}
+
+QPushButton#settings_panel_button:hover {
+    background: #3474bf;
+    border-color: #3474bf;
+}
+
+QPushButton#settings_panel_button:pressed,
+QPushButton#settings_panel_button:checked {
+    background: #245ea8;
+    border-color: #245ea8;
 }
 
 QPushButton#start_camera_button,
