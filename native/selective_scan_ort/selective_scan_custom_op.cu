@@ -4,6 +4,7 @@
 #include <new>
 #include <string>
 
+#include "hierarchical_fps_custom_op.h"
 #include "onnxruntime_c_api.h"
 
 namespace {
@@ -488,6 +489,11 @@ extern "C" __declspec(dllexport) OrtStatus* ORT_API_CALL RegisterCustomOps(
       return status;
     }
     status = api->CustomOpDomain_Add(g_domain, &g_core_custom_op);
+    if (status != nullptr) {
+      return status;
+    }
+    status = api->CustomOpDomain_Add(
+        g_domain, eventmamba::GetHierarchicalFpsCustomOp());
     if (status != nullptr) {
       return status;
     }

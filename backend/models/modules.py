@@ -1,52 +1,10 @@
 import torch
 import torch.nn as nn
-import math
-import torch.nn.functional as F
+
+
 ##### use the cuda to accelerate the FPS#####
 # from pointnet2_ops.pointnet2_utils import furthest_point_sample as farthest_point_sample
-def get_activation(activation):
-    if activation.lower() == 'gelu':
-        return nn.GELU()
-    elif activation.lower() == 'rrelu':
-        return nn.RReLU(inplace=True)
-    elif activation.lower() == 'selu':
-        return nn.SELU(inplace=True)
-    elif activation.lower() == 'silu':
-        return nn.SiLU(inplace=True)
-    elif activation.lower() == 'hardswish':
-        return nn.Hardswish(inplace=True)
-    elif activation.lower() == 'leakyrelu':
-        return nn.LeakyReLU(inplace=True)
-    else:
-        return nn.ReLU(inplace=True)
 
-# def square_distance(src, dst):
-#     """
-#     Calculate Euclid distance between each two points.
-#     src^T * dst = xn * xm + yn * ym + zn * zm；
-#     sum(src^2, dim=-1) = xn*xn + yn*yn + zn*zn;
-#     sum(dst^2, dim=-1) = xm*xm + ym*ym + zm*zm;
-#     dist = (xn - xm)^2 + (yn - ym)^2 + (zn - zm)^2
-#          = sum(src**2,dim=-1)+sum(dst**2,dim=-1)-2*src^T*dst
-#     Input:
-#         src: source points, [B, N, C]
-#         dst: target points, [B, M, C]
-#     Output:
-#         dist: per-point square distance, [B, N, M]
-#     """
-#     B, N, _ = src.shape
-#     _, M, _ = dst.shape
-#     time_weight = 0.01
-#     scale = torch.tensor([math.sqrt(time_weight), 1.0, 1.0], device=src.device)
-#     src_weighted = src * scale.view(1, 1, -1)
-#     dst_weighted = dst * scale.view(1, 1, -1)
-#     # dist = -2 * torch.matmul(src, dst.permute(0, 2, 1))
-#     # dist += torch.sum(src ** 2, -1).view(B, N, 1)
-#     # dist += torch.sum(dst ** 2, -1).view(B, 1, M)
-#     dist = -2 * torch.matmul(src_weighted, dst_weighted.permute(0, 2, 1))
-#     dist += torch.sum(src_weighted ** 2, -1).view(B, N, 1)
-#     dist += torch.sum(dst_weighted ** 2, -1).view(B, 1, M)
-#     return dist
 
 def square_distance(src, dst):
     """
@@ -96,7 +54,7 @@ def furthest_point_sample(xyz, npoint):
         centroids: sampled pointcloud index, [B, npoint]
     """
     device = xyz.device
-    B, N, C = xyz.shape
+    B, N, _ = xyz.shape
     centroids = torch.zeros(B, npoint, dtype=torch.long).to(device)
     distance = torch.ones(B, N).to(device) * 1e10
     farthest = torch.randint(0, N, (B,), dtype=torch.long).to(device)
@@ -109,26 +67,12 @@ def furthest_point_sample(xyz, npoint):
         farthest = torch.max(distance, -1)[1]
     return centroids
 
-def knn_point(nsample, xyz, new_xyz):
-    """
-    Input:
-        nsample: max sample number in local region
-        xyz: all points, [B, N, C]
-        new_xyz: query points, [B, S, C]
-    Return:
-        group_idx: grouped points index, [B, S, nsample]
-    """
-    sqrdists = square_distance(new_xyz, xyz)
-    _, group_idx = torch.topk(sqrdists, nsample, dim=-1, largest=False, sorted=False)
-    return group_idx
-
 class LocalGrouper(nn.Module):
-    def __init__(self, channel, groups, kneighbors, use_xyz=True, normalize="center", **kwargs):
+    def __init__(self, channel, groups, kneighbors, use_xyz=True, normalize="center"):
         """
         Give xyz[b,p,3] and fea[b,p,d], return new_xyz[b,g,3] and new_fea[b,g,k,d]
         :param groups: groups number
         :param kneighbors: k-nerighbors
-        :param kwargs: others
         """
         super(LocalGrouper, self).__init__()
         self.groups = groups
@@ -139,7 +83,10 @@ class LocalGrouper(nn.Module):
         else:
             self.normalize = None
         if self.normalize not in ["center", "anchor"]:
-            print(f"Unrecognized normalize parameter (self.normalize), set to None. Should be one of [center, anchor].")
+            print(
+                f"Unrecognized normalize parameter ({self.normalize}), set to None. "
+                "Should be one of [center, anchor]."
+            )
             self.normalize = None
         if self.normalize is not None:
             add_channel=3 if self.use_xyz else 0
@@ -147,16 +94,15 @@ class LocalGrouper(nn.Module):
             self.affine_beta = nn.Parameter(torch.zeros([1, 1, 1, channel + add_channel]))
 
     def forward(self, xyz, points):
-        B, N, C = xyz.shape
+        B = xyz.shape[0]
         S = self.groups
         xyz = xyz.contiguous()  # xyz [btach, points, xyz]
         fps_idx = furthest_point_sample(xyz, self.groups).long()  # [B, npoint]
         #### use the cuda to accelerate the FPS####
         # fps_idx = farthest_point_sample(xyz, self.groups).long()
-        fps_idx,indices = torch.sort(fps_idx, dim=1)
+        fps_idx = torch.sort(fps_idx, dim=1).values
         new_xyz = index_points(xyz, fps_idx)  # [B, npoint, 3]
         new_points = index_points(points, fps_idx)  # [B, npoint, d]
-        # idx = knn_point(self.kneighbors, xyz, new_xyz)
         #### if use the feature distance to select the neighbors, may condauct overfitting, flexiblely to choose xyz or features####
         dists = square_distance(new_xyz, xyz)
         # dists = square_distance(new_points, points)  # B x npoint x N

@@ -4,6 +4,7 @@ import time
 from backend.aedat4_source import run_aedat4_replay_loop
 from backend.h5_replay import run_h5_replay_loop
 from backend.metavision_source import run_metavision_event_loop
+from backend.replay_clock import clamp_fraction
 
 
 @dataclass(frozen=True)
@@ -29,7 +30,7 @@ class SourceMetadata:
         if not self.seekable or self.duration_us <= 0:
             return self.start_time_us
 
-        fraction = _clamp_fraction(fraction)
+        fraction = clamp_fraction(fraction)
         offset_us = int(self.duration_us * fraction)
         alignment_us = max(1, int(alignment_us or 1))
         offset_us = (offset_us // alignment_us) * alignment_us
@@ -177,11 +178,3 @@ def _request_resource_stop(resource):
         except Exception:
             return False
     return False
-
-
-def _clamp_fraction(value):
-    try:
-        fraction = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, min(1.0, fraction))

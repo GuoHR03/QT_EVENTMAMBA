@@ -5,8 +5,6 @@ from backend.event_processing import EVENT_CD_DTYPE
 from backend.h5_replay import (
     h5_find_start_index_for_time,
     h5_events_to_event_cd,
-    h5_frame_interval_us,
-    h5_replay_sleep_s,
     run_h5_replay_loop,
     select_h5_event_fields,
     split_events_for_frame,
@@ -72,17 +70,6 @@ def test_split_events_for_frame_at_boundary():
     assert reached is True
     assert frame_part.tolist() == [(1, 1, 1, 100)]
     assert remainder.tolist() == [(2, 2, 1, 250), (3, 3, 1, 300)]
-
-
-def test_h5_timing_helpers():
-    assert h5_frame_interval_us(50) == 20000
-    assert h5_frame_interval_us(0) == 33333
-    assert h5_replay_sleep_s(
-        next_frame_target_time=120000,
-        start_sensor_time=100000,
-        start_real_time=10.0,
-        now=10.005,
-    ) == pytest.approx(0.015)
 
 
 def test_run_h5_replay_loop_emits_frames_and_sleeps():

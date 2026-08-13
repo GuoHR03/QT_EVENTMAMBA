@@ -60,3 +60,18 @@ def test_build_windows_backend_executable_command_omits_python_script():
         "--port",
         "5555",
     ]
+
+
+def test_windows_backend_command_can_bind_healthcheck_nonce():
+    command = build_windows_backend_executable_command(
+        "backend.exe",
+        "center.onnx",
+        "ellipse.onnx",
+        "matrix.npy",
+        "custom.dll",
+        "center",
+        5555,
+        instance_nonce="nonce-123",
+    )
+
+    assert command[-2:] == ["--instance-nonce", "nonce-123"]

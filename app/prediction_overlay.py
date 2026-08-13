@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from PyQt6.QtCore import QPointF
 from PyQt6.QtGui import QColor, QPainter, QPen
 
+from backend.event_processing import normalize_roi
+
 
 LEGACY_RESULT_MARKER = "输出结果为："
 
@@ -15,6 +17,8 @@ class PredictionSample:
     coordinate_mode: str
     cropped: bool = False
     prediction_mode: str = "center"
+    effective_roi: object = None
+    has_effective_roi: bool = False
 
 
 def parse_prediction_result(result, fallback_mode="center"):
@@ -66,7 +70,9 @@ def select_prediction_for_frame(prediction_buffer, frame_timestamp, interval_ms,
 
 
 def draw_prediction(q_img, sample, width, height, current_roi):
-    pixel = map_prediction_to_pixel(sample, width, height, current_roi)
+    roi = sample.effective_roi if sample.has_effective_roi else current_roi
+    frame_roi = normalize_roi(roi, width, height)
+    pixel = map_prediction_to_pixel(sample, width, height, frame_roi)
     if pixel is None:
         return
 
@@ -79,7 +85,7 @@ def draw_prediction(q_img, sample, width, height, current_roi):
 
     if sample.prediction_mode == "ellipse" and len(sample.values) >= 5:
         _, _, major, minor, angle = sample.values[:5]
-        scale_width, scale_height = _ellipse_scale(width, height, sample, current_roi)
+        scale_width, scale_height = _ellipse_scale(width, height, sample, frame_roi)
         painter.save()
         painter.translate(px, py)
         painter.rotate(math.degrees(angle))
@@ -94,6 +100,9 @@ def draw_prediction(q_img, sample, width, height, current_roi):
 def map_prediction_to_pixel(sample, width, height, current_roi):
     if sample is None:
         return None
+    if sample.has_effective_roi:
+        current_roi = sample.effective_roi
+    current_roi = normalize_roi(current_roi, width, height)
     if sample.cropped:
         return _map_cropped_prediction_to_pixel(sample.values, width, height, current_roi)
     if sample.coordinate_mode == "norm":
@@ -109,6 +118,8 @@ def _parse_structured_result(result, fallback_mode):
         values=values,
         cropped=bool(result.get("cropped", False)),
         prediction_mode=result.get("mode") or fallback_mode,
+        effective_roi=result.get("effective_roi"),
+        has_effective_roi="effective_roi" in result,
     )
 
 
@@ -133,7 +144,13 @@ def _parse_legacy_result(result, fallback_mode):
     return _build_sample(values=values, cropped=is_cropped, prediction_mode=fallback_mode)
 
 
-def _build_sample(values, cropped, prediction_mode):
+def _build_sample(
+    values,
+    cropped,
+    prediction_mode,
+    effective_roi=None,
+    has_effective_roi=False,
+):
     if not isinstance(values, (list, tuple)) or len(values) < 2:
         return None
 
@@ -152,6 +169,8 @@ def _build_sample(values, cropped, prediction_mode):
         coordinate_mode=coordinate_mode,
         cropped=bool(cropped),
         prediction_mode=prediction_mode,
+        effective_roi=effective_roi,
+        has_effective_roi=bool(has_effective_roi),
     )
 
 
@@ -159,20 +178,28 @@ def _map_cropped_prediction_to_pixel(pred, width, height, current_roi):
     x, y = pred[0], pred[1]
     if current_roi:
         roi_x, roi_y, roi_width, roi_height = current_roi
-        px = int(roi_x + x * roi_width)
-        py = int(roi_y + y * roi_height)
+        px = roi_x + _normalized_offset(x, roi_width)
+        py = roi_y + _normalized_offset(y, roi_height)
         return _bounded_pixel(px, py, width, height)
 
     canonical_x = x * 512 + 96
     canonical_y = y * 512 - 16
-    px = int(canonical_x * width / 640)
-    py = int(canonical_y * height / 480)
+    crop_left = math.ceil(96 * width / 640)
+    crop_right = math.ceil(608 * width / 640) - 1
+    px = max(
+        _bounded_coordinate(crop_left, width),
+        min(
+            _bounded_coordinate(crop_right, width),
+            int(canonical_x * width / 640),
+        ),
+    )
+    py = _bounded_coordinate(int(canonical_y * height / 480), height)
     return _bounded_pixel(px, py, width, height)
 
 
 def _map_normalized_prediction_to_pixel(pred, width, height):
-    px = int(pred[0] * width)
-    py = int(pred[1] * height)
+    px = _normalized_offset(pred[0], width)
+    py = _normalized_offset(pred[1], height)
     return _bounded_pixel(px, py, width, height)
 
 
@@ -188,8 +215,20 @@ def _bounded_pixel(px, py, width, height):
     return px, py
 
 
+def _normalized_offset(value, extent):
+    if extent <= 0:
+        return 0
+    return _bounded_coordinate(int(float(value) * extent), extent)
+
+
+def _bounded_coordinate(value, extent):
+    return max(0, min(int(extent) - 1, int(value)))
+
+
 def _ellipse_scale(width, height, sample, current_roi):
     if sample.cropped and current_roi:
         _, _, roi_width, roi_height = current_roi
         return roi_width, roi_height
+    if sample.cropped:
+        return width * (512.0 / 640.0), height * (512.0 / 480.0)
     return width, height

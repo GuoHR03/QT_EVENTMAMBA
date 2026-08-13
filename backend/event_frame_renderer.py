@@ -28,37 +28,37 @@ class EventFrameRenderer(FrameRenderer):
         return True
 
     def process_events(self, events):
-        if self._closed or events is None or len(events) == 0 or self.frame_callback is None:
+        if events is None or len(events) == 0:
             return
 
         with self._lock:
-            background = self.background.copy()
-            positive_color = self.positive.copy()
-            negative_color = self.negative.copy()
+            if self._closed or self.frame_callback is None:
+                return
+            self._frame[:, :] = self.background
 
-        self._frame[:, :] = background
+            x = np.asarray(events["x"], dtype=np.int64)
+            y = np.asarray(events["y"], dtype=np.int64)
+            valid = (x >= 0) & (x < self.width) & (y >= 0) & (y < self.height)
+            if not np.any(valid):
+                return
 
-        x = np.asarray(events["x"], dtype=np.int64)
-        y = np.asarray(events["y"], dtype=np.int64)
-        valid = (x >= 0) & (x < self.width) & (y >= 0) & (y < self.height)
-        if not np.any(valid):
-            return
+            x = x[valid]
+            y = y[valid]
+            polarity = np.asarray(events["p"])[valid]
+            keep = _last_event_per_pixel(x, y, self.width)
+            x = x[keep]
+            y = y[keep]
+            polarity = polarity[keep]
 
-        x = x[valid]
-        y = y[valid]
-        polarity = np.asarray(events["p"])[valid]
-        keep = _last_event_per_pixel(x, y, self.width)
-        x = x[keep]
-        y = y[keep]
-        polarity = polarity[keep]
+            positive = polarity > 0
+            if np.any(~positive):
+                self._frame[y[~positive], x[~positive]] = self.negative
+            if np.any(positive):
+                self._frame[y[positive], x[positive]] = self.positive
 
-        positive = polarity > 0
-        if np.any(~positive):
-            self._frame[y[~positive], x[~positive]] = negative_color
-        if np.any(positive):
-            self._frame[y[positive], x[positive]] = positive_color
-
-        self.frame_callback(int(events["t"][-1]), self._frame.copy())
+            callback = self.frame_callback
+            frame = self._frame.copy()
+        callback(int(events["t"][-1]), frame)
 
     def reset(self):
         if self._closed:

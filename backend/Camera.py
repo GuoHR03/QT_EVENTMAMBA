@@ -10,6 +10,7 @@ class CameraThread(QThread):
     status_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
     progress_signal = pyqtSignal(int, int)
+    source_ready_signal = pyqtSignal(int, int)
 
     def __init__(
         self,
@@ -19,6 +20,7 @@ class CameraThread(QThread):
         seek_fraction=0.0,
         duration_hint_us=0,
         report_noise_filter_status=True,
+        analysis_enabled=False,
     ):
         super().__init__()
         self.coordinator = PlaybackCoordinator(
@@ -28,9 +30,11 @@ class CameraThread(QThread):
             seek_fraction=seek_fraction,
             duration_hint_us=duration_hint_us,
             report_noise_filter_status=report_noise_filter_status,
+            analysis_enabled=analysis_enabled,
             frame_callback=self.image_signal.emit,
             status_callback=self.status_signal.emit,
             progress_callback=self.progress_signal.emit,
+            source_ready_callback=self.source_ready_signal.emit,
         )
 
     def run(self):
@@ -44,6 +48,9 @@ class CameraThread(QThread):
 
     def update_config(self, config):
         return self.coordinator.update_config(config)
+
+    def set_analysis_enabled(self, enabled):
+        return self.coordinator.set_analysis_enabled(enabled)
 
     def start_recording(self):
         return self.coordinator.start_recording()

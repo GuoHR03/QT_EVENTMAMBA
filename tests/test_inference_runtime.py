@@ -6,7 +6,6 @@ from backend.inference_runtime import (
     decode_backend_log,
     default_backend_log_path,
     read_float_env,
-    runtime_resource_dir,
     runtime_root_dir,
     to_wsl_path,
 )
@@ -32,12 +31,6 @@ def test_to_wsl_path_leaves_linux_and_empty_paths_unchanged():
     assert to_wsl_path("/home/user/model.pth") == "/home/user/model.pth"
     assert to_wsl_path("") == ""
     assert to_wsl_path(None) is None
-
-
-def test_runtime_resource_dir_uses_frozen_meipass_when_available(tmp_path):
-    bundle_dir = tmp_path / "bundle"
-
-    assert runtime_resource_dir(__file__, frozen=True, meipass=str(bundle_dir)) == str(bundle_dir)
 
 
 def test_runtime_root_dir_uses_frozen_executable_directory(tmp_path):

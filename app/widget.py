@@ -1,15 +1,3 @@
-import sys
-import traceback
-
-try:
-    from .bootstrap import app_resource_path, configure_runtime
-    from .runtime_smoke import runtime_smoke_exit_code
-except ImportError:
-    from bootstrap import app_resource_path, configure_runtime
-    from runtime_smoke import runtime_smoke_exit_code
-
-configure_runtime(__file__)
-
 from PyQt6 import uic
 from PyQt6.QtCore import QSize, QTimer, Qt
 from PyQt6.QtGui import (
@@ -30,6 +18,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLayout,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -38,30 +27,26 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-try:
-    from .choose_windows import ChooseWindow
-    from .controller import AppController
-    from .file_dialogs import choose_input_file, choose_weights_file
-    from .log_formatter import backend_message, mode_display_name, noise_settings_message, roi_settings_message
-    from .prediction_overlay import draw_prediction
-    from .prediction_state import PredictionState
-    from .settings import AppSettings
-    from .theme import apply_app_theme
-    from .ui_log import log_level_for_message
-    from .ui_status import source_display_name
-    from .view_state import MainViewState
-except ImportError:
-    from choose_windows import ChooseWindow
-    from controller import AppController
-    from file_dialogs import choose_input_file, choose_weights_file
-    from log_formatter import backend_message, mode_display_name, noise_settings_message, roi_settings_message
-    from prediction_overlay import draw_prediction
-    from prediction_state import PredictionState
-    from settings import AppSettings
-    from theme import apply_app_theme
-    from ui_log import log_level_for_message
-    from ui_status import source_display_name
-    from view_state import MainViewState
+from backend.event_processing import normalize_roi
+
+from .bootstrap import app_resource_path
+from .choose_windows import ChooseWindow
+from .controller import AppController
+from .file_dialogs import choose_input_file, choose_weights_file
+from .inference_operation import InferenceOperationThread
+from .log_formatter import (
+    backend_message,
+    mode_display_name,
+    noise_settings_message,
+    roi_settings_message,
+)
+from .prediction_overlay import draw_prediction
+from .prediction_state import PredictionState
+from .settings import AppSettings
+from .theme import apply_app_theme
+from .ui_log import log_level_for_message
+from .ui_status import source_display_name
+from .view_state import MainViewState, source_is_file
 
 SUPPORTED_PALETTES = {"Dark", "Light", "CoolWarm", "Gray"}
 REPLAY_SPEEDS = {
@@ -72,20 +57,11 @@ REPLAY_SPEEDS = {
     "4x": 4.0,
 }
 PLAYBACK_SLIDER_MAX = 10000
-
-
-def exception_hook(exctype, value, tb):
-    print("\n========== [!] 捕获到致命崩溃 [!] ==========")
-    traceback.print_exception(exctype, value, tb)
-    print("==========================================\n")
-    try:
-        input("程序已崩溃，请查看上方报错信息，然后按回车键退出...")
-    except EOFError:
-        pass
-    sys.exit(1)
-
-
-sys.excepthook = exception_hook
+INFERENCE_START = "start"
+INFERENCE_STOP = "stop"
+INFERENCE_RESTART = "restart"
+INFERENCE_CLEANUP = "cleanup"
+INFERENCE_CLOSE = "close"
 
 
 class MainWindow(QWidget):
@@ -104,11 +80,25 @@ class MainWindow(QWidget):
         self._is_dragging_progress = False
         self._progress_total_us = 0
         self._last_frame_size = None
+        self._inference_operation = None
+        self._close_pending = False
+        self._close_ready = False
+        self._cleanup_after_operation = False
+        self._last_inference_state = None
 
         self._connect_signals()
         self._init_view_state()
+        self._inference_health_timer = QTimer(self)
+        self._inference_health_timer.setInterval(1000)
+        self._inference_health_timer.timeout.connect(self._refresh_inference_state)
+        self._inference_health_timer.start()
 
     def _configure_inference_runtime_ui(self):
+        runtime_name = self.controller.inference_runtime_display_name
+        self.runtime_name_label.setText(f"推理后端：{runtime_name}")
+        self.runtime_name_label.setToolTip(
+            "推理后端由运行环境配置，界面中不可切换"
+        )
         if self.controller.inference_runtime_kind != "windows":
             return
 
@@ -245,8 +235,6 @@ class MainWindow(QWidget):
         # horizontal sizing flexible so long file names cannot widen the
         # scroll area's content beyond its viewport.
         self.control_panel_layout.setSizeConstraint(QLayout.SizeConstraint.SetDefaultConstraint)
-        self.settings_group_box.setMinimumHeight(0)
-
         panel_index = self.content_horizontal_layout.indexOf(self.control_panel_widget)
         self.content_horizontal_layout.removeWidget(self.control_panel_widget)
         self.control_panel_scroll_area = QScrollArea(self)
@@ -265,57 +253,41 @@ class MainWindow(QWidget):
         self.control_panel_scroll_area.setWidget(self.control_panel_widget)
         self.content_horizontal_layout.insertWidget(panel_index, self.control_panel_scroll_area)
 
-        self.model_group_box.setTitle("模型")
-        self.input_group_box.setTitle("输入")
-        self.settings_group_box.setTitle("显示与处理")
-        self.capture_group_box.setTitle("采集")
         self.palette_text_label.setText("配色")
         self.speed_text_label.setText("回放速度")
         self.fps_text_label.setText("帧率")
-        self.roi_window_button.setText("区域、模式与去噪")
         self.select_weight_button.setText("选择权重")
-        self.unload_model_button.setText("关闭模型")
-        self.select_input_file_button.setText("选择数据文件")
+        self.load_model_button.setText("启动推理")
+        self.unload_model_button.setText("停止推理")
+        self.restart_model_button.setText("重启推理")
+        self.live_camera_button.setText("实时相机")
+        self.select_input_file_button.setText("选择 RAW 文件")
         self.weight_path_label.setText("尚未选择权重")
         self.input_file_label.setText("实时相机")
 
         self.palette_combo_box.setToolTip("选择事件极性的显示配色")
         self.replay_speed_combo_box.setToolTip("调整离线文件的回放速度")
+        self.live_camera_button.setToolTip("切换到已连接的实时事件相机")
+        self.select_input_file_button.setToolTip(
+            "选择 RAW 事件文件；H5 和 AEDAT4 作为兼容格式保留"
+        )
         self.fps_spin_box.setToolTip(
             "控制画面帧率和每帧事件累计时间，不影响模型的 20 ms 推理窗口"
         )
-        self.roi_window_button.setToolTip("配置 ROI、预测模式和事件去噪")
         self.record_button.setText("录制 RAW")
         self.record_button.setToolTip("仅实时相机支持录制 RAW 数据")
 
-        self.settings_group_layout.removeWidget(self.roi_window_button)
-        self.roi_window_button.hide()
         self.roi_settings_editor = ChooseWindow(
             initial_mode=self.settings.prediction_mode,
             initial_roi=self.settings.roi,
             initial_noise_filter_type=self.settings.noise_filter_type,
             initial_noise_filter_threshold_us=self.settings.noise_filter_threshold_us,
             parent=self.control_panel_widget,
-            embedded=True,
         )
-        self.roi_settings_group_box = QGroupBox(self.control_panel_widget)
-        roi_settings_layout = QVBoxLayout(self.roi_settings_group_box)
-        roi_settings_layout.setContentsMargins(0, 0, 0, 0)
-        roi_settings_layout.addWidget(self.roi_settings_editor)
 
         self._build_logical_control_groups()
 
-        self.settings_group_layout.setContentsMargins(12, 18, 12, 12)
-        self.settings_group_layout.setSpacing(9)
-        for layout in (
-            self.model_group_layout,
-            self.input_group_layout,
-            self.capture_group_layout,
-        ):
-            layout.setContentsMargins(12, 18, 12, 12)
-
         self._init_control_panel_accordion()
-        self._control_panel_visible = False
         self.control_panel_scroll_area.setVisible(False)
 
     def _build_logical_control_groups(self):
@@ -325,7 +297,6 @@ class MainWindow(QWidget):
             self.input_group_box,
             self.settings_group_box,
             self.capture_group_box,
-            self.roi_settings_group_box,
         )
         for group in old_groups:
             self.control_panel_layout.removeWidget(group)
@@ -333,14 +304,17 @@ class MainWindow(QWidget):
 
         flexible_controls = (
             self.input_file_label,
+            self.live_camera_button,
             self.select_input_file_button,
             self.replay_speed_combo_box,
             self.start_camera_button,
             self.record_button,
             self.weight_path_label,
+            self.runtime_name_label,
             self.select_weight_button,
             self.load_model_button,
             self.unload_model_button,
+            self.restart_model_button,
             self.palette_combo_box,
             self.fps_spin_box,
             self.roi_settings_editor.noise_filter_combo_box,
@@ -365,8 +339,12 @@ class MainWindow(QWidget):
         source_layout = QVBoxLayout(self.source_group_box)
         source_layout.setContentsMargins(12, 12, 12, 12)
         source_layout.setSpacing(8)
+        source_mode_layout = QHBoxLayout()
+        source_mode_layout.setSpacing(8)
+        source_mode_layout.addWidget(self.live_camera_button)
+        source_mode_layout.addWidget(self.select_input_file_button)
+        source_layout.addLayout(source_mode_layout)
         source_layout.addWidget(self.input_file_label)
-        source_layout.addWidget(self.select_input_file_button)
 
         self.playback_group_box = QGroupBox(self.control_panel_widget)
         playback_layout = QGridLayout(self.playback_group_box)
@@ -389,12 +367,14 @@ class MainWindow(QWidget):
         inference_layout = QVBoxLayout(self.inference_group_box)
         inference_layout.setContentsMargins(12, 12, 12, 12)
         inference_layout.setSpacing(8)
+        inference_layout.addWidget(self.runtime_name_label)
         inference_layout.addWidget(self.weight_path_label)
         inference_layout.addWidget(self.select_weight_button)
         model_buttons = QHBoxLayout()
         model_buttons.setSpacing(8)
         model_buttons.addWidget(self.load_model_button)
         model_buttons.addWidget(self.unload_model_button)
+        model_buttons.addWidget(self.restart_model_button)
         inference_layout.addLayout(model_buttons)
         self.prediction_mode_group_box = QGroupBox(self.control_panel_widget)
         mode_layout = QHBoxLayout(self.prediction_mode_group_box)
@@ -459,7 +439,7 @@ class MainWindow(QWidget):
         view_controls_layout.setContentsMargins(10, 8, 10, 10)
         view_controls_layout.setSpacing(8)
         for group_box, title in (
-            (self.playback_group_box, "播放控制"),
+            (self.playback_group_box, "采集与回放"),
             (self.display_group_box, "显示设置"),
             (self.roi_group_box, "ROI 区域"),
         ):
@@ -471,7 +451,7 @@ class MainWindow(QWidget):
         """Turn the existing control groups into a compact accordion."""
         sections = (
             (self.source_group_box, "数据源"),
-            (self.playback_display_roi_group_box, "播放、显示与 ROI"),
+            (self.playback_display_roi_group_box, "采集、显示与 ROI"),
             (self.recording_group_box, "数据录制"),
             (self.model_prediction_group_box, "模型与预测"),
             (self.processing_group_box, "去噪"),
@@ -525,6 +505,53 @@ class MainWindow(QWidget):
         )
         self.control_panel_widget.updateGeometry()
 
+    def _apply_source_mode(self):
+        """Apply all live-versus-file visibility from one source of truth."""
+        file_mode = source_is_file(self.controller)
+        input_path = str(self.controller.input_file_path or "").lower()
+        if not file_mode:
+            control_title = "实时采集"
+        elif input_path.endswith(".raw"):
+            control_title = "RAW 回放"
+        else:
+            control_title = "文件回放"
+        self.playback_group_box.setTitle(control_title)
+
+        for widget in (
+            self.speed_text_label,
+            self.replay_speed_combo_box,
+            self.playback_progress_slider,
+            self.playback_time_label,
+        ):
+            widget.setVisible(file_mode)
+
+        recording_header = None
+        for header, content in self._control_accordion_sections:
+            if content is self.recording_group_box:
+                recording_header = header
+                header.parentWidget().setVisible(not file_mode)
+                break
+        self.record_button.setVisible(not file_mode)
+        if file_mode and recording_header is not None and recording_header.isChecked():
+            self._set_accordion_section(self.source_group_box, True)
+
+        for button, selected in (
+            (self.live_camera_button, not file_mode),
+            (self.select_input_file_button, file_mode),
+        ):
+            button.setProperty("sourceSelected", selected)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+        if not file_mode:
+            self._reset_playback_progress()
+        self.control_panel_layout.activate()
+        self.control_panel_widget.setMinimumHeight(
+            self.control_panel_layout.sizeHint().height()
+        )
+        self.control_panel_widget.updateGeometry()
+        QTimer.singleShot(0, self._fit_event_view)
+
     def _init_log_panel_ui(self):
         self._log_collapsed = False
         self.log_group_box.setTitle("")
@@ -576,7 +603,6 @@ class MainWindow(QWidget):
 
     def _set_control_panel_visible(self, visible):
         visible = bool(visible)
-        self._control_panel_visible = visible
         self.control_panel_scroll_area.setVisible(visible)
 
         if self.settings_panel_button.isChecked() != visible:
@@ -604,6 +630,8 @@ class MainWindow(QWidget):
         self.select_weight_button.clicked.connect(self.select_weight_file)
         self.load_model_button.clicked.connect(self.load_eventmamba)
         self.unload_model_button.clicked.connect(self.unload_eventmamba)
+        self.restart_model_button.clicked.connect(self.restart_eventmamba)
+        self.live_camera_button.clicked.connect(self.select_live_camera)
         self.select_input_file_button.clicked.connect(self.select_input_file)
         self.playback_progress_slider.sliderPressed.connect(self._begin_progress_drag)
         self.playback_progress_slider.sliderMoved.connect(self._preview_progress_drag)
@@ -624,9 +652,10 @@ class MainWindow(QWidget):
         self.replay_speed_combo_box.setCurrentText("1x")
         self.weight_path_label.setToolTip(self.weight_path_label.text())
         self.input_file_label.setToolTip(self.input_file_label.text())
+        self.view_state.set_live_camera()
         self.view_state.set_camera_stopped()
         self.view_state.set_recording_stopped(enabled=False)
-        self.view_state.set_model_unloaded()
+        self.view_state.set_model_stopped()
         self._set_status_chip(
             self.mode_status_label,
             mode_display_name(self.settings.prediction_mode),
@@ -667,7 +696,15 @@ class MainWindow(QWidget):
 
     def set_source_status(self, file_path):
         self._last_frame_size = None
-        if file_path and not self.controller.is_camera_running():
+        self._apply_source_mode()
+        if not source_is_file(self.controller):
+            self._input_file_display_name = "实时相机"
+            self.input_file_label.setText("实时相机")
+            self.input_file_label.setToolTip("使用已连接的实时事件相机")
+            self._set_status_chip(self.source_status_label, "实时输入", "info")
+            return
+
+        if not self.controller.is_camera_running():
             self.start_camera_button.setText("开始播放")
         normalized_path = str(file_path or "").replace("\\", "/")
         full_name = normalized_path.rsplit("/", 1)[-1] or self.input_file_label.text()
@@ -741,7 +778,12 @@ class MainWindow(QWidget):
         if frame_size != self._last_frame_size:
             self._last_frame_size = frame_size
             self._fit_event_view()
-            source_name = source_display_name(self.controller.input_file_path)
+            source_path = (
+                self.controller.input_file_path
+                if source_is_file(self.controller)
+                else None
+            )
+            source_name = source_display_name(source_path)
             self._set_status_chip(
                 self.source_status_label,
                 f"{source_name}  {width}x{height}",
@@ -818,15 +860,64 @@ class MainWindow(QWidget):
         self.predictions.add_result(result, pred_timestamp, self.settings.prediction_mode)
 
     def closeEvent(self, event):
-        self.controller.close()
-        event.accept()
-
-    def restart_camera_if_running(self):
-        if not self.controller.is_camera_running():
+        if self._close_ready:
+            event.accept()
             return
-        QApplication.processEvents()
-        self._sync_capture_settings_from_ui()
-        self.controller.restart_camera_if_running()
+
+        event.ignore()
+        if not self._close_pending:
+            self._close_pending = True
+            self.setEnabled(False)
+            self._inference_health_timer.stop()
+
+        if self._inference_operation_is_running():
+            if self._inference_operation.operation_name == INFERENCE_CLOSE:
+                # Do not cancel the cleanup worker itself. If it were
+                # interrupted before calling stop_backend(), accepting this
+                # close would leave the inference process orphaned.
+                return
+            self._inference_operation.requestInterruption()
+            try:
+                self.controller.cancel_model_start()
+            except Exception as exc:
+                self.append_log(f"取消推理启动失败：{exc}", "error")
+            return
+
+        self._begin_close_cleanup()
+
+    def _begin_close_cleanup(self):
+        if self._inference_operation_is_running():
+            return
+
+        try:
+            self.controller.close_ui_resources()
+        except Exception as exc:
+            self.append_log(f"关闭 Qt 运行资源失败：{exc}", "error")
+            self._close_pending = False
+            self.setEnabled(True)
+            self._inference_health_timer.start()
+            self.view_state.set_model_error()
+            return
+
+        self.view_state.set_model_stopping()
+        started = self._start_inference_operation(
+            INFERENCE_CLOSE,
+            self.controller.close_backend_resources,
+            allow_when_closing=True,
+        )
+        if not started:
+            # Starting the cleanup worker can itself fail. Keep the window
+            # alive so the retained process/thread handles can be retried.
+            if self._close_pending:
+                self.append_log("无法启动关闭清理任务，窗口保持打开", "error")
+                self._close_pending = False
+                self.setEnabled(True)
+                self._inference_health_timer.start()
+                self.view_state.set_model_error()
+
+    def _complete_close(self):
+        self._close_ready = True
+        QTimer.singleShot(0, self.close)
 
     def update_replay_speed(self):
         self._sync_capture_settings_from_ui()
@@ -840,12 +931,16 @@ class MainWindow(QWidget):
         self.stop_camera()
 
     def handle_playback_progress(self, current_us, total_us):
+        if not source_is_file(self.controller):
+            self._reset_playback_progress()
+            return
+
         total_us = max(0, int(total_us or 0))
         current_us = max(0, int(current_us or 0))
         if total_us > 0:
             current_us = min(total_us, current_us)
         self._progress_total_us = total_us
-        self.playback_progress_slider.setEnabled(total_us > 0 and bool(self.controller.input_file_path))
+        self.playback_progress_slider.setEnabled(total_us > 0)
 
         if not self._is_dragging_progress:
             value = 0
@@ -865,22 +960,50 @@ class MainWindow(QWidget):
         self.controller.stop_camera()
         self.view_state.set_camera_stopped()
         self.view_state.set_recording_stopped(enabled=False)
-        self.camera_image_label.setText("相机未启动")
+        self.camera_image_label.setText(
+            "回放已停止" if source_is_file(self.controller) else "相机未启动"
+        )
         self.predictions.clear()
         self._reset_playback_progress()
+
+    def select_live_camera(self):
+        if not source_is_file(self.controller):
+            self.view_state.set_live_camera()
+            self._refresh_camera_view_state()
+            return
+
+        self._reset_playback_progress()
+        self.predictions.clear()
+        QApplication.processEvents()
+        self._sync_capture_settings_from_ui()
+        self.controller.set_live_camera()
+        self.view_state.set_live_camera()
+        self._refresh_camera_view_state()
 
     def select_input_file(self):
         file_path = choose_input_file(self)
         if not file_path:
             return
 
-        self.view_state.set_input_file(file_path)
         self._reset_playback_progress()
+        self.predictions.clear()
         QApplication.processEvents()
         self._sync_capture_settings_from_ui()
         self.controller.set_input_file(file_path, restart_if_running=True)
+        self.view_state.set_input_file(file_path)
+        self._refresh_camera_view_state()
+
+    def _refresh_camera_view_state(self):
+        if self.controller.is_camera_running():
+            self.view_state.set_camera_running()
+            return
+        self.view_state.set_camera_stopped()
+        self.view_state.set_recording_stopped(enabled=False)
 
     def select_weight_file(self):
+        if self.controller.is_inference_running():
+            self.append_log("请先停止推理服务，再选择其他模型", "warning")
+            return
         weights_path = choose_weights_file(
             self,
             runtime_kind=self.controller.inference_runtime_kind,
@@ -889,48 +1012,262 @@ class MainWindow(QWidget):
             return
 
         self.view_state.set_weight_file(weights_path)
-        stopped_running_model = self.controller.set_weights_path(weights_path)
-        if stopped_running_model:
-            self.view_state.set_model_unloaded()
-            self.predictions.clear()
-            self.append_log("已选择新模型，请重新加载", "info")
+        self.controller.set_weights_path(weights_path)
 
     def load_eventmamba(self):
+        if self._close_pending:
+            return
+        if self._inference_operation_is_running():
+            self.append_log("已有推理服务操作正在进行，请稍候", "warning")
+            return
         if self.controller.weights_path is None:
             self.append_log("请先选择模型文件", "warning")
             return
+        if not self._stop_model_network_before_backend("启动"):
+            return
 
         runtime_name = self.controller.inference_runtime_display_name
-        self.view_state.set_model_loading()
+        self.view_state.set_model_starting()
         self.append_log(
             f"正在启动 {runtime_name} 推理服务并加载{mode_display_name(self.settings.prediction_mode)}模型，首次加载可能需要几秒钟...",
             "info",
         )
-        QApplication.processEvents()
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-
-        try:
-            self.controller.load_model()
-        except Exception as exc:
-            self.view_state.set_model_unloaded()
-            self.append_log(f"加载模型失败：{exc}", "error")
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-
-        self.append_log(f"{runtime_name} 推理服务已就绪，模型加载完成", "success")
-        if self.controller.active_model_path:
-            self.view_state.set_weight_file(self.controller.active_model_path)
-        self.view_state.set_model_loaded()
+        self._start_inference_operation(INFERENCE_START, self.controller.load_model)
 
     def unload_eventmamba(self):
-        self.controller.unload_model()
-        self.view_state.set_model_unloaded()
+        if self._close_pending:
+            return
+        if self._inference_operation_is_running():
+            self.append_log("已有推理服务操作正在进行，请稍候", "warning")
+            return
         runtime_name = self.controller.inference_runtime_display_name
-        self.append_log(f"{runtime_name} 推理服务已关闭，可以重新选择模型并加载", "info")
-        self.predictions.clear()
+        self.view_state.set_model_stopping()
+        if not self._stop_model_network_before_backend("停止"):
+            return
+        self.append_log(f"正在停止 {runtime_name} 推理服务...", "info")
+        self._start_inference_operation(INFERENCE_STOP, self.controller.unload_model)
+
+    def restart_eventmamba(self):
+        if self._close_pending:
+            return
+        if self._inference_operation_is_running():
+            self.append_log("已有推理服务操作正在进行，请稍候", "warning")
+            return
+        if self.controller.weights_path is None:
+            self.append_log("请先选择模型文件", "warning")
+            return
+        runtime_name = self.controller.inference_runtime_display_name
+        self.view_state.set_model_starting()
+        if not self._stop_model_network_before_backend("重启"):
+            return
+        self.append_log(f"正在重启 {runtime_name} 推理服务...", "info")
+        self._start_inference_operation(INFERENCE_RESTART, self.controller.restart_model)
+
+    def _stop_model_network_before_backend(self, action):
+        """Destroy NetworkThread on the UI thread before a backend worker."""
+        try:
+            self.controller.stop_model_network()
+        except Exception as exc:
+            self.view_state.set_model_error()
+            self.append_log(f"{action}推理前停止网络线程失败：{exc}", "error")
+            self._last_inference_state = self.controller.inference_state
+            return False
+        return True
+
+    def _start_inference_operation(
+        self,
+        operation_name,
+        operation,
+        allow_when_closing=False,
+    ):
+        if self._close_pending and not allow_when_closing:
+            return False
+        if self._inference_operation_is_running():
+            self.append_log("已有推理服务操作正在进行，请稍候", "warning")
+            return False
+
+        worker = InferenceOperationThread(operation_name, operation, self)
+        worker.succeeded.connect(self._handle_inference_operation_success)
+        worker.failed.connect(self._handle_inference_operation_failure)
+        worker.cancelled.connect(self._handle_inference_operation_cancelled)
+        worker.finished.connect(self._finish_inference_operation)
+        self._inference_operation = worker
+        self._set_prediction_mode_controls_enabled(False)
+        try:
+            worker.start()
+        except Exception as exc:
+            self._inference_operation = None
+            worker.deleteLater()
+            self._set_prediction_mode_controls_enabled(True)
+            self._handle_inference_operation_failure(operation_name, str(exc))
+            return False
+        return True
+
+    def _handle_inference_operation_success(self, operation_name):
+        if self._close_pending or operation_name == INFERENCE_CLOSE:
+            return
+
+        runtime_name = self.controller.inference_runtime_display_name
+        if operation_name == INFERENCE_STOP:
+            self.view_state.set_model_stopped()
+            self.predictions.clear()
+            self.append_log(f"{runtime_name} 推理服务已停止", "info")
+        elif operation_name == INFERENCE_CLEANUP:
+            self.view_state.set_model_stopped()
+            self.predictions.clear()
+            self.append_log("失败操作残留的推理后端已清理", "info")
+        elif operation_name in (INFERENCE_START, INFERENCE_RESTART):
+            try:
+                self.controller.start_model_network()
+            except Exception as exc:
+                self._handle_network_start_failure(operation_name, exc)
+                return
+            if self.controller.active_model_path:
+                self.view_state.set_weight_file(self.controller.active_model_path)
+            self.view_state.set_model_running()
+            action = "启动" if operation_name == INFERENCE_START else "重启"
+            self.append_log(f"{runtime_name} 推理服务已{action}", "success")
+        self._last_inference_state = self.controller.inference_state
+
+    def _handle_network_start_failure(self, operation_name, error):
+        cleanup_details = ""
+        try:
+            self.controller.stop_model_network()
+        except Exception as cleanup_error:
+            cleanup_details = f"；网络线程清理失败：{cleanup_error}"
+
+        self._cleanup_after_operation = True
+        self.view_state.set_model_error()
+        action = "启动" if operation_name == INFERENCE_START else "重启"
+        self.append_log(
+            f"{action}推理网络失败：{error}{cleanup_details}；正在清理后端",
+            "error",
+        )
+        self._last_inference_state = self.controller.inference_state
+
+    def _handle_inference_operation_failure(self, operation_name, message):
+        action = {
+            INFERENCE_START: "启动推理",
+            INFERENCE_STOP: "停止推理",
+            INFERENCE_RESTART: "重启推理",
+            INFERENCE_CLEANUP: "清理推理后端",
+            INFERENCE_CLOSE: "关闭推理后端",
+        }.get(operation_name, "推理操作")
+        self.append_log(f"{action}失败：{message}", "error")
+
+        if operation_name == INFERENCE_CLOSE:
+            self._close_pending = False
+            self.setEnabled(True)
+            self._inference_health_timer.start()
+            self.view_state.set_model_error()
+            self._last_inference_state = self.controller.inference_state
+            return
+        if self._close_pending:
+            return
+        self.view_state.set_model_error()
+        self._last_inference_state = self.controller.inference_state
+
+    def _handle_inference_operation_cancelled(self, operation_name):
+        if operation_name == INFERENCE_CLOSE:
+            self._close_pending = False
+            self.setEnabled(True)
+            self._inference_health_timer.start()
+            self.view_state.set_model_error()
+            self.append_log("关闭清理被取消，窗口保持打开", "warning")
+            self._last_inference_state = self.controller.inference_state
+            return
+        if self._close_pending:
+            return
+        self.view_state.set_model_error()
+        self.append_log(f"推理操作已取消：{operation_name}", "warning")
+        self._last_inference_state = self.controller.inference_state
+
+    def _finish_inference_operation(self):
+        worker = self._inference_operation
+        operation_name = None
+        if worker is not None:
+            operation_name = worker.operation_name
+            worker.deleteLater()
+        self._inference_operation = None
+
+        if self._close_pending:
+            self._cleanup_after_operation = False
+            if operation_name == INFERENCE_CLOSE:
+                self._complete_close()
+            else:
+                QTimer.singleShot(0, self._begin_close_cleanup)
+            return
+
+        if self._cleanup_after_operation:
+            self._cleanup_after_operation = False
+            self.view_state.set_model_stopping()
+            QTimer.singleShot(0, self._start_backend_cleanup)
+            return
+
+        self._set_prediction_mode_controls_enabled(True)
+
+    def _start_backend_cleanup(self):
+        if self._close_pending:
+            self._begin_close_cleanup()
+            return
+        started = self._start_inference_operation(
+            INFERENCE_CLEANUP,
+            self.controller.unload_model,
+        )
+        if not started:
+            self._set_prediction_mode_controls_enabled(True)
+            self.view_state.set_model_error()
+            self.append_log("无法启动推理后端清理任务", "error")
+
+    def _inference_operation_is_running(self):
+        # Keep the UI operation busy until its queued success/failure and
+        # finished signals have all been handled on the main thread. A worker
+        # can already report isRunning() == False while those signals are
+        # still pending.
+        return self._inference_operation is not None
+
+    def _set_prediction_mode_controls_enabled(self, enabled):
+        self.roi_settings_editor.center_radioButton.setEnabled(enabled)
+        self.roi_settings_editor.eli_radioButton.setEnabled(enabled)
+
+    def _refresh_inference_state(self):
+        if self._close_pending or self._inference_operation_is_running():
+            return
+        if self.controller.inference_state == "running":
+            self.controller.is_inference_running()
+        state = self.controller.inference_state
+        if state == self._last_inference_state:
+            return
+        self._last_inference_state = state
+
+        if state == "running":
+            self.view_state.set_model_running()
+        elif state == "starting":
+            self.view_state.set_model_starting()
+        elif state == "stopping":
+            self.view_state.set_model_stopping()
+        elif state == "error":
+            self.view_state.set_model_error()
+            if self.controller.inference_last_error:
+                self.append_log(
+                    f"推理服务异常：{self.controller.inference_last_error}",
+                    "error",
+                )
+        else:
+            self.view_state.set_model_stopped()
 
     def on_settings_confirmed(self, roi, mode, filter_type, threshold_us):
+        if roi is not None and self._last_frame_size is not None:
+            frame_width, frame_height = self._last_frame_size
+            if normalize_roi(roi, frame_width, frame_height) is None:
+                QMessageBox.warning(
+                    self,
+                    "区域无效",
+                    "ROI 与当前图像没有交集，请检查 X、Y、宽度和高度。",
+                )
+                return
+        inference_mode_changed = mode != self.settings.prediction_mode
+        previous_roi = self.settings.roi
         self._sync_capture_settings_from_ui()
         camera_settings_changed = self.controller.apply_settings(
             roi,
@@ -945,11 +1282,14 @@ class MainWindow(QWidget):
             noise_settings_message(filter_type, self.settings.noise_filter_threshold_us),
             "info",
         )
-        if roi is not None:
-            self.append_log(roi_settings_message(self.settings.roi, mode), "info")
+        applied_roi = self.settings.roi
+        if applied_roi != previous_roi:
+            self.predictions.clear()
+        if applied_roi is not None or (roi is None and previous_roi is not None):
+            self.append_log(roi_settings_message(applied_roi, mode), "info")
         self._set_status_chip(self.mode_status_label, mode_display_name(mode), "info")
-        if self.controller.is_inference_running() and self.controller.active_model_path:
-            self.view_state.set_weight_file(self.controller.active_model_path)
+        if inference_mode_changed and self.controller.is_inference_running():
+            self.restart_eventmamba()
 
     def _selected_palette(self):
         selected = self.palette_combo_box.currentText()
@@ -1017,19 +1357,3 @@ def _format_playback_time_us(timestamp_us):
     if hours:
         return f"{hours:d}:{minutes:02d}:{second_value:06.3f}"
     return f"{minutes:02d}:{second_value:06.3f}"
-
-
-def main():
-    smoke_exit_code = runtime_smoke_exit_code()
-    if smoke_exit_code is not None:
-        sys.exit(smoke_exit_code)
-
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()

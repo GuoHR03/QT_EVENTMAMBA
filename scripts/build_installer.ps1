@@ -22,28 +22,37 @@ $BackendBundleDir = Join-Path $DistRoot "UI_Event_Backend"
 $BackendRuntimeDir = Join-Path $UiBundleDir "backend_runtime"
 $ArtifactSourceDir = Join-Path $ProjectRoot "artifacts"
 $NativeDllSource = Join-Path $ProjectRoot "native\selective_scan_ort\bin\eventmamba_selective_scan.dll"
+$ArtifactValidator = Join-Path $ProjectRoot "tools\validate_windows_inference_artifacts.py"
+$NativeFpsProbe = Join-Path $ProjectRoot "tools\onnx_hierarchical_fps_custom_op_probe.py"
 $MetavisionSdkRoot = if ($env:METAVISION_SDK_PATH) {
     [Environment]::ExpandEnvironmentVariables($env:METAVISION_SDK_PATH.Trim().Trim('"'))
 } else {
     "E:\Metavision\Prophesee"
 }
 $MetavisionDestinationRoot = Join-Path $UiBundleDir "metavision"
-$MetavisionRuntimeDirectories = @(
-    "bin",
-    "third_party\bin",
-    "lib\hdf5\plugin",
-    "lib\metavision\hal\plugins"
-)
-$MetavisionRequiredFiles = @(
+$MetavisionRuntimeFiles = @(
+    "third_party\bin\boost_filesystem-vc143-mt-x64-1_78.dll",
+    "third_party\bin\jpeg62.dll",
+    "third_party\bin\liblzma.dll",
+    "third_party\bin\libpng16.dll",
+    "third_party\bin\libsharpyuv.dll",
+    "third_party\bin\libusb-1.0.dll",
+    "third_party\bin\libwebp.dll",
+    "third_party\bin\libwebpdecoder.dll",
     "third_party\bin\opencv_core4.dll",
+    "third_party\bin\opencv_highgui4.dll",
+    "third_party\bin\opencv_imgcodecs4.dll",
     "third_party\bin\opencv_imgproc4.dll",
+    "third_party\bin\opencv_videoio4.dll",
+    "third_party\bin\tiff.dll",
+    "third_party\bin\zlib1.dll",
     "lib\hdf5\plugin\H5Zecf.dll",
     "lib\metavision\hal\plugins\hal_plugin_prophesee.dll",
     "lib\metavision\hal\plugins\metavision_psee_hw_layer.dll"
 )
 $ArtifactNames = @(
-    "eventmamba_center_selective_scan_cuda.onnx",
-    "eventmamba_ellipse_selective_scan_cuda.onnx",
+    "eventmamba_center_native_fps.onnx",
+    "eventmamba_ellipse_native_fps.onnx",
     "eventmamba_ellipse_matrix_A.npy"
 )
 
@@ -73,24 +82,17 @@ function Assert-DirectoryExists {
     }
 }
 
-function Assert-FilePatternExists {
-    param(
-        [string]$Directory,
-        [string]$Pattern,
-        [string]$Label
-    )
+function Assert-NoForbiddenReleaseFiles {
+    param([string]$Root)
 
-    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
-        throw "$Label directory was not found: $Directory"
+    $forbidden = Get-ChildItem -LiteralPath $Root -File -Recurse | Where-Object {
+        $_.FullName -match '[\\/]__pycache__[\\/]' -or
+        $_.Name -match '_d(?:\.dll|\.cp\d+-win_amd64\.pyd)$' -or
+        $_.Name -match '\.cp39-win_amd64\.pyd$'
     }
-
-    $match = Get-ChildItem `
-        -LiteralPath $Directory `
-        -Filter $Pattern `
-        -File |
-        Select-Object -First 1
-    if (-not $match) {
-        throw "$Label was not found in $Directory (expected $Pattern)"
+    if ($forbidden) {
+        $sample = ($forbidden | Select-Object -First 5 -ExpandProperty FullName) -join ', '
+        throw "Forbidden debug/cache/CPython 3.9 files entered the release bundle: $sample"
     }
 }
 
@@ -127,6 +129,109 @@ function Assert-PyInstaller {
     & $Python -c "import PyInstaller" 2>$null
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller is not installed in $EnvironmentName. Install it with: `"$Python`" -m pip install pyinstaller"
+    }
+}
+
+function Assert-InferenceArtifacts {
+    param(
+        [string]$CenterModel,
+        [string]$EllipseModel,
+        [string]$EllipseMatrix,
+        [string]$CustomOpLibrary,
+        [switch]$ProbeNativeFps
+    )
+
+    Write-Host "==> Validating native-FPS inference artifacts"
+    & $BackendPython $ArtifactValidator `
+        --center $CenterModel `
+        --ellipse $EllipseModel `
+        --matrix $EllipseMatrix `
+        --custom-op-library $CustomOpLibrary
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inference artifact contract validation failed"
+    }
+
+    if ($ProbeNativeFps) {
+        & $BackendPython $NativeFpsProbe `
+            --custom-op-library $CustomOpLibrary `
+            --warmups 1 `
+            --repeats 3
+        if ($LASTEXITCODE -ne 0) {
+            throw "Native hierarchical FPS custom-op probe failed"
+        }
+    }
+}
+
+function Invoke-PackagedBackendSmoke {
+    param(
+        [string]$BackendExecutable,
+        [string]$CenterModel,
+        [string]$EllipseModel,
+        [string]$EllipseMatrix,
+        [string]$CustomOpLibrary
+    )
+
+    $listener = [System.Net.Sockets.TcpListener]::new(
+        [System.Net.IPAddress]::Loopback,
+        0
+    )
+    $listener.Start()
+    $port = $listener.LocalEndpoint.Port
+    $listener.Stop()
+
+    $stdoutLog = Join-Path $BuildRoot "packaged_backend_smoke.stdout.log"
+    $stderrLog = Join-Path $BuildRoot "packaged_backend_smoke.stderr.log"
+    $arguments = @(
+        "--center-model", "`"$CenterModel`"",
+        "--ellipse-model", "`"$EllipseModel`"",
+        "--ellipse-matrix", "`"$EllipseMatrix`"",
+        "--custom-op-library", "`"$CustomOpLibrary`"",
+        "--port", "$port",
+        "--instance-nonce", "packaged-fps-smoke"
+    )
+
+    Write-Host "==> Running packaged backend native-FPS smoke on port $port"
+    $process = Start-Process `
+        -FilePath $BackendExecutable `
+        -ArgumentList $arguments `
+        -WorkingDirectory (Split-Path -Parent $BackendExecutable) `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardError $stderrLog `
+        -PassThru
+    try {
+        & $BackendPython $NativeFpsProbe `
+            --custom-op-library $CustomOpLibrary `
+            --warmups 1 `
+            --repeats 3
+        if ($LASTEXITCODE -ne 0) {
+            throw "Staged native FPS operator probe failed"
+        }
+        & $BackendPython (Join-Path $ProjectRoot "tools\smoke_packaged_backend.py") `
+            --port $port `
+            --timeout-s 90
+        if ($LASTEXITCODE -ne 0) {
+            throw "Packaged backend prediction smoke failed"
+        }
+    }
+    catch {
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force
+            $process.WaitForExit()
+        }
+        if (Test-Path -LiteralPath $stdoutLog) {
+            Write-Host (Get-Content -LiteralPath $stdoutLog -Raw -ErrorAction SilentlyContinue)
+        }
+        if (Test-Path -LiteralPath $stderrLog) {
+            Write-Host (Get-Content -LiteralPath $stderrLog -Raw -ErrorAction SilentlyContinue)
+        }
+        throw
+    }
+    finally {
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force
+            $process.WaitForExit()
+        }
     }
 }
 
@@ -179,6 +284,8 @@ Assert-FileExists $BackendPython "Windows inference Python interpreter"
 Assert-FileExists $UiSpec "UI PyInstaller spec"
 Assert-FileExists $BackendSpec "Windows backend PyInstaller spec"
 Assert-FileExists $InstallerScript "Inno Setup script"
+Assert-FileExists $ArtifactValidator "Inference artifact validator"
+Assert-FileExists $NativeFpsProbe "Native FPS probe"
 $expectedInstallerVersion = "#define MyAppVersion `"$ReleaseVersion`""
 if (-not (Select-String `
     -LiteralPath $InstallerScript `
@@ -191,20 +298,11 @@ foreach ($artifactName in $ArtifactNames) {
 }
 Assert-FileExists $NativeDllSource "Selective-scan custom operator"
 Assert-DirectoryExists $MetavisionSdkRoot "Metavision SDK root (set METAVISION_SDK_PATH if installed elsewhere)"
-foreach ($runtimeDirectory in $MetavisionRuntimeDirectories) {
-    Assert-DirectoryExists `
-        (Join-Path $MetavisionSdkRoot $runtimeDirectory) `
-        "Required Metavision runtime directory"
-}
-foreach ($runtimeFile in $MetavisionRequiredFiles) {
+foreach ($runtimeFile in $MetavisionRuntimeFiles) {
     Assert-FileExists `
         (Join-Path $MetavisionSdkRoot $runtimeFile) `
         "Required Metavision runtime file"
 }
-Assert-FilePatternExists `
-    (Join-Path $MetavisionSdkRoot "third_party\bin") `
-    "boost_filesystem*.dll" `
-    "Required Metavision Boost.Filesystem runtime"
 
 Write-Host "==> UI_Event release $ReleaseVersion"
 Write-Host "==> Project: $ProjectRoot"
@@ -214,6 +312,13 @@ Write-Host "==> Metavision SDK: $MetavisionSdkRoot"
 
 Assert-PyInstaller $UiPython "UI environment"
 Assert-PyInstaller $BackendPython "Windows inference environment"
+
+Assert-InferenceArtifacts `
+    -CenterModel (Join-Path $ArtifactSourceDir "eventmamba_center_native_fps.onnx") `
+    -EllipseModel (Join-Path $ArtifactSourceDir "eventmamba_ellipse_native_fps.onnx") `
+    -EllipseMatrix (Join-Path $ArtifactSourceDir "eventmamba_ellipse_matrix_A.npy") `
+    -CustomOpLibrary $NativeDllSource `
+    -ProbeNativeFps
 
 if ($Clean) {
     Write-Host "==> Cleaning generated build outputs"
@@ -247,9 +352,17 @@ if (Test-Path -LiteralPath $BackendRuntimeDir) {
 }
 
 Write-Host "==> Staging Windows inference runtime"
-New-Item -ItemType Directory -Path $BackendRuntimeDir | Out-Null
-Get-ChildItem -LiteralPath $BackendBundleDir -Force |
-    Copy-Item -Destination $BackendRuntimeDir -Recurse -Force
+$resolvedBackendBundle = [System.IO.Path]::GetFullPath($BackendBundleDir).TrimEnd("\")
+$expectedBackendBundle = [System.IO.Path]::GetFullPath(
+    (Join-Path $DistRoot "UI_Event_Backend")
+).TrimEnd("\")
+if ($resolvedBackendBundle -ne $expectedBackendBundle) {
+    throw "Refusing to move an unexpected backend bundle: $resolvedBackendBundle"
+}
+Move-Item -LiteralPath $resolvedBackendBundle -Destination $BackendRuntimeDir
+if (Test-Path -LiteralPath $BackendBundleDir) {
+    throw "Backend staging left a duplicate bundle behind: $BackendBundleDir"
+}
 
 $artifactDestinationDir = Join-Path $UiBundleDir "artifacts"
 New-Item -ItemType Directory -Path $artifactDestinationDir -Force | Out-Null
@@ -266,9 +379,9 @@ New-Item -ItemType Directory -Path $nativeDllDestinationDir -Force | Out-Null
 Copy-Item -LiteralPath $NativeDllSource -Destination $nativeDllDestination -Force
 
 Write-Host "==> Staging Metavision runtime"
-foreach ($runtimeDirectory in $MetavisionRuntimeDirectories) {
-    $runtimeSource = Join-Path $MetavisionSdkRoot $runtimeDirectory
-    $runtimeDestination = Join-Path $MetavisionDestinationRoot $runtimeDirectory
+foreach ($runtimeFile in $MetavisionRuntimeFiles) {
+    $runtimeSource = Join-Path $MetavisionSdkRoot $runtimeFile
+    $runtimeDestination = Join-Path $MetavisionDestinationRoot $runtimeFile
     New-Item `
         -ItemType Directory `
         -Path (Split-Path -Parent $runtimeDestination) `
@@ -277,39 +390,50 @@ foreach ($runtimeDirectory in $MetavisionRuntimeDirectories) {
     Copy-Item `
         -LiteralPath $runtimeSource `
         -Destination $runtimeDestination `
-        -Recurse `
         -Force
 }
 
 $requiredBundleFiles = @(
     $uiExePath,
     (Join-Path $BackendRuntimeDir "UI_Event_Backend.exe"),
-    (Join-Path $artifactDestinationDir "eventmamba_center_selective_scan_cuda.onnx"),
-    (Join-Path $artifactDestinationDir "eventmamba_ellipse_selective_scan_cuda.onnx"),
+    (Join-Path $artifactDestinationDir "eventmamba_center_native_fps.onnx"),
+    (Join-Path $artifactDestinationDir "eventmamba_ellipse_native_fps.onnx"),
     (Join-Path $artifactDestinationDir "eventmamba_ellipse_matrix_A.npy"),
     $nativeDllDestination,
     (Join-Path $UiBundleDir "_internal\app\form.ui"),
-    (Join-Path $UiBundleDir "_internal\app\choose_form.ui")
+    (Join-Path $UiBundleDir "_internal\metavision_hal_internal.cp38-win_amd64.pyd"),
+    (Join-Path $UiBundleDir "_internal\metavision_sdk_base_internal.cp38-win_amd64.pyd"),
+    (Join-Path $UiBundleDir "_internal\metavision_sdk_base_paths_internal.cp38-win_amd64.pyd"),
+    (Join-Path $UiBundleDir "_internal\metavision_sdk_core_internal.cp38-win_amd64.pyd"),
+    (Join-Path $UiBundleDir "_internal\metavision_sdk_cv_internal.cp38-win_amd64.pyd")
 )
 foreach ($requiredFile in $requiredBundleFiles) {
     Assert-FileExists $requiredFile "Required release file"
 }
-Assert-DirectoryExists (Join-Path $UiBundleDir "_internal\libs") "Bundled Metavision libraries"
+Assert-InferenceArtifacts `
+    -CenterModel (Join-Path $artifactDestinationDir "eventmamba_center_native_fps.onnx") `
+    -EllipseModel (Join-Path $artifactDestinationDir "eventmamba_ellipse_native_fps.onnx") `
+    -EllipseMatrix (Join-Path $artifactDestinationDir "eventmamba_ellipse_matrix_A.npy") `
+    -CustomOpLibrary $nativeDllDestination
+Assert-DirectoryExists (Join-Path $UiBundleDir "_internal\libs\bin") "Bundled Metavision release DLLs"
 Assert-DirectoryExists (Join-Path $BackendRuntimeDir "_internal") "Bundled Windows inference dependencies"
-foreach ($runtimeDirectory in $MetavisionRuntimeDirectories) {
-    Assert-DirectoryExists `
-        (Join-Path $MetavisionDestinationRoot $runtimeDirectory) `
-        "Staged Metavision runtime directory"
-}
-foreach ($runtimeFile in $MetavisionRequiredFiles) {
+foreach ($runtimeFile in $MetavisionRuntimeFiles) {
     Assert-FileExists `
         (Join-Path $MetavisionDestinationRoot $runtimeFile) `
         "Staged Metavision runtime file"
 }
-Assert-FilePatternExists `
-    (Join-Path $MetavisionDestinationRoot "third_party\bin") `
-    "boost_filesystem*.dll" `
-    "Staged Metavision Boost.Filesystem runtime"
+
+$unexpectedSourceCopies = @(
+    (Join-Path $UiBundleDir "_internal\backend"),
+    (Join-Path $UiBundleDir "_internal\linux_backend.py"),
+    (Join-Path $UiBundleDir "_internal\windows_backend.py")
+)
+foreach ($unexpectedPath in $unexpectedSourceCopies) {
+    if (Test-Path -LiteralPath $unexpectedPath) {
+        throw "Source directory/file was copied into the frozen UI bundle: $unexpectedPath"
+    }
+}
+Assert-NoForbiddenReleaseFiles $UiBundleDir
 
 $cuda12Runtime = Get-ChildItem `
     -LiteralPath (Join-Path $BackendRuntimeDir "_internal") `
@@ -320,6 +444,13 @@ $cuda12Runtime = Get-ChildItem `
 if (-not $cuda12Runtime) {
     throw "The backend bundle is missing cudart64_12.dll required by eventmamba_selective_scan.dll"
 }
+
+Invoke-PackagedBackendSmoke `
+    -BackendExecutable (Join-Path $BackendRuntimeDir "UI_Event_Backend.exe") `
+    -CenterModel (Join-Path $artifactDestinationDir "eventmamba_center_native_fps.onnx") `
+    -EllipseModel (Join-Path $artifactDestinationDir "eventmamba_ellipse_native_fps.onnx") `
+    -EllipseMatrix (Join-Path $artifactDestinationDir "eventmamba_ellipse_matrix_A.npy") `
+    -CustomOpLibrary $nativeDllDestination
 
 Write-Host "==> Portable bundle ready: $UiBundleDir"
 

@@ -7,7 +7,6 @@ from backend.model_assets import (
     MODE_ELLIPSE,
     matrix_path_for_weights,
     validate_model_asset,
-    weights_for_mode,
 )
 
 
@@ -33,8 +32,3 @@ def test_validate_ellipse_asset_returns_matrix_path():
 
     assert asset.mode == MODE_ELLIPSE
     assert asset.matrix_path == os.path.join("models", "matrix_A.pt")
-
-
-def test_weights_for_mode_selects_matching_path():
-    assert weights_for_mode(MODE_CENTER, "center.pth", "ellipse.pth") == "center.pth"
-    assert weights_for_mode(MODE_ELLIPSE, "center.pth", "ellipse.pth") == "ellipse.pth"

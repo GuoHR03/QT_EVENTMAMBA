@@ -2,9 +2,9 @@
 
 ## 当前结论
 
-中心点和椭圆模型均已完成 Windows 原生 ONNX Runtime GPU 验证，并成功用同一个自定义 CUDA 算子替换各自的 6 个 selective-scan `Loop`。中心点真实 RAW 样本的完整 GPU 推理约 `18.4 ms`；椭圆模型纯 ONNX GPU 推理约 `16.58 ms`。
+中心点和椭圆模型均已完成 Windows 原生 ONNX Runtime GPU 验证，并成功用同一个自定义算子 DLL 替换各自的 6 个 selective-scan `Loop`，同时把三级最远点采样从 Python 移入 ONNX 图中的 CPU 原生算子。当前真实 RAW 样本上，center 的 FPS+GPU 端到端 P50 约 `16.45 ms`，ellipse 约 `16.36 ms`。
 
-因此，中心点和椭圆推理均不再需要用户侧 WSL、PyTorch 或 `mamba-ssm`。两种模式都已经接入 Qt 的 Windows 后端；尚未完成的是 CUDA 运行库打包以及不同 NVIDIA 显卡的兼容测试。
+因此，中心点和椭圆推理均不再需要用户侧 WSL、PyTorch、`mamba-ssm` 或 Python FPS 循环。两种模式都已经接入 Qt 的 Windows 后端，原生模型、椭圆矩阵、Custom Op DLL 和 CUDA 运行库也已进入安装包构建链；仍需继续补测其他 NVIDIA 显卡架构。
 
 ## 验证链路
 
@@ -16,7 +16,7 @@
 - 完整三层中心点模型最大绝对误差：约 `6.54e-06`
 - 均通过 `allclose(rtol=1e-3, atol=1e-4)`
 
-最远点采样 FPS 从模型中移出，作为三个显式输入：
+最初导出时，最远点采样 FPS 暂时作为三个显式输入：
 
 - `fps0`: `[1, 512]`
 - `fps1`: `[1, 256]`
@@ -70,12 +70,41 @@ Windows 隔离环境使用 Python 3.13、ONNX Runtime GPU 1.27。修正 9 个旧
 - 最快：`17.35 ms`
 - 最慢：`21.02 ms`
 
-与未融合的 Windows GPU 路径相比，当前实测加速约 360 倍；与 Windows CPU 路径相比，约快 98 倍。该结果包含一次完整 `session.run()`，但不包含 RAW 文件解析和 NumPy FPS 的时间。
+与未融合的 Windows GPU 路径相比，当前实测加速约 360 倍；与 Windows CPU 路径相比，约快 98 倍。该历史结果包含一次完整 `session.run()`，但不包含 RAW 文件解析和 NumPy FPS 的时间。当前原生 FPS 模型的 `session.run()` 已包含三级 FPS。
+
+### 5. 原生三级 FPS
+
+`tools/onnx_insert_hierarchical_fps.py` 在保留原图其余节点的前提下，将
+`fps0/fps1/fps2` 三个图输入替换为：
+
+```text
+events [B,3,1024] + fps_starts [B,3]
+  -> com.eventmamba::HierarchicalFarthestPointSampling
+  -> fps0 [B,512], fps1 [B,256], fps2 [B,128]
+```
+
+算子使用 C++/CPU 实现，保持 float32 距离、逐层升序重排、相对索引和最低
+索引 tie-break。随机 batch=2、重复点和真实窗口的三级索引均与 NumPy oracle
+逐项一致；非法 shape、起点及非有限输入会被拒绝。
+
+- 独立算子：P50 `1.00 ms`，P95 `1.21 ms`
+- center 旧 Python FPS+GPU：P50 `26.71 ms`
+- center 原生 FPS+GPU：P50 `16.45 ms`，下降约 `38%`
+- ellipse 旧 Python FPS+GPU：P50 `25.90 ms`
+- ellipse 原生 FPS+GPU：P50 `16.36 ms`，下降约 `37%`
+- 严格 ZMQ center 请求：P50 `33.46 -> 17.34 ms`，下降约 `48%`
+- 严格 ZMQ ellipse 请求：P50 `33.82 -> 17.92 ms`，下降约 `47%`
+- center/ellipse 的真实样本和 3 组合成样本均通过
+  `allclose(rtol=1e-3, atol=1e-4)`
 
 ## 构建与验证工具
 
 - `tools/build_selective_scan_ort.ps1`
 - `tools/onnx_selective_scan_custom_op_probe.py`
+- `tools/onnx_hierarchical_fps_custom_op_probe.py`
+- `tools/onnx_insert_hierarchical_fps.py`
+- `tools/onnx_native_fps_equivalence_probe.py`
+- `tools/validate_windows_inference_artifacts.py`
 - `tools/onnx_replace_selective_scan_loops.py`
 - `tools/onnx_windows_runtime_probe.py`
 - `tools/onnx_cuda_runtime.py`
@@ -88,7 +117,7 @@ Windows 隔离环境使用 Python 3.13、ONNX Runtime GPU 1.27。修正 9 个旧
 - `tools/onnx_exportable_eventmamba.py`
 - `tools/onnx_ellipse_windows_probe.py`
 
-### 5. 椭圆模型 Windows 结果
+### 6. 椭圆模型 Windows 结果
 
 椭圆模型使用 `checkpoint/v14_new/P3best_checkpoint.pth` 和 `matrix_A.pt`，导出为 1024 维 VSA 输出的 ONNX 模型。`matrix_A` 单独转换为 NumPy 文件，运行时不需要 PyTorch。
 
@@ -97,14 +126,14 @@ Windows 隔离环境使用 Python 3.13、ONNX Runtime GPU 1.27。修正 9 个旧
 - PyTorch 与 NumPy VSA 解码最大绝对误差：`1.19e-07`
 - `allclose(rtol=1e-3, atol=1e-4)`：通过
 - 纯 ONNX GPU 10 次平均：`16.58 ms`
-- Qt、ZMQ、FPS 与 GPU 完整链路预热后平均：`46.84 ms`
+- 历史 Qt、ZMQ、Python FPS 与 GPU 完整链路预热后平均：`46.84 ms`
 - 输出顺序：`[x, y, a, b, angle]`
 
-ONNX、NPZ、编译产物、依赖头文件和运行库缓存均位于已忽略目录，不会被误提交。
+正式 native-FPS ONNX、椭圆矩阵和 Custom Op DLL 作为版本化发布资产保留；其余实验模型、NPZ、构建目录、依赖头文件和运行库缓存继续忽略。
 
 ## 后续工作
 
 1. 将完整 8 输入 `SelectiveScan` 节点直接写入导出图，避免目前保留的 `delta_a`、`delta_b_u` 中间大张量。
 2. 发布时统一 CUDA Toolkit/运行库版本，补测其他 NVIDIA 架构和无 NVIDIA GPU 的 CPU 回退策略。
-3. 将 ONNX 模型、`matrix_A.npy`、自定义算子和运行库纳入 Windows 安装包。
-4. 完成安装包回归后，从正式产品中移除 WSL 调用链。
+3. 在干净目标机继续执行 center/ellipse 打包后端长时间与模式切换回归。
+4. 评估将原生 FPS 迁移到 CUDA 是否能抵消新增的 CPU/CUDA Memcpy；当前 CPU 版本已达到实时门槛，迁移前需证明净收益。

@@ -1,17 +1,18 @@
 from PyQt6.QtWidgets import QFileDialog
 
-try:
-    from .paths import default_checkpoint_dir, default_onnx_model_dir, default_record_dir
-except ImportError:
-    from paths import default_checkpoint_dir, default_onnx_model_dir, default_record_dir
+from .paths import default_checkpoint_dir, default_onnx_model_dir, default_record_dir
 
 
 def choose_input_file(parent):
     file_path, _ = QFileDialog.getOpenFileName(
         parent,
-        "选择离线视频文件",
+        "选择 RAW 事件文件",
         default_record_dir(),
-        "视频文件 (*.raw *.hdf5 *.h5 *.aedat4);;所有文件 (*)",
+        (
+            "RAW 事件文件 (*.raw);;"
+            "兼容事件文件 (*.hdf5 *.h5 *.aedat4);;"
+            "所有文件 (*)"
+        ),
     )
     return file_path
 

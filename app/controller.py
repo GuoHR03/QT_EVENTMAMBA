@@ -1,8 +1,7 @@
-from backend.api import BackendAPI
-
-
 class AppController:
     def __init__(self, settings):
+        from backend.api import BackendAPI
+
         self.settings = settings
         self.backend = BackendAPI()
         self.input_file_path = None
@@ -16,6 +15,18 @@ class AppController:
 
     def is_inference_running(self):
         return self.backend.is_inference_running()
+
+    @property
+    def inference_state(self):
+        return self.backend.inference.state
+
+    @property
+    def inference_last_error(self):
+        return self.backend.inference.last_error
+
+    @property
+    def source_mode(self):
+        return self.backend.source_mode
 
     @property
     def inference_runtime_kind(self):
@@ -62,41 +73,66 @@ class AppController:
         self.backend.seek_playback(seek_fraction)
 
     def start_recording(self):
-        self.backend.start_recording()
+        return self.backend.start_recording()
 
     def stop_recording(self):
-        self.backend.stop_recording()
+        return self.backend.stop_recording()
 
     def toggle_recording(self):
         if not self.is_camera_running():
             return None
         if self.is_recording():
-            self.stop_recording()
-            return False
-        self.start_recording()
-        return True
+            return False if self.stop_recording() else None
+        return bool(self.start_recording())
 
     def set_input_file(self, file_path, restart_if_running=False):
-        self.input_file_path = file_path
-        self.backend.set_input_file(file_path)
-        if restart_if_running:
-            return self.restart_camera_if_running()
-        return False
+        if not file_path:
+            return self.set_live_camera()
+
+        self.input_file_path = str(file_path)
+        return self.backend.set_input_file(
+            self.input_file_path,
+            config=self.settings.playback_config,
+            restart_if_running=restart_if_running,
+        )
+
+    def set_live_camera(self):
+        self.input_file_path = None
+        return self.backend.set_live_camera(config=self.settings.playback_config)
 
     def set_weights_path(self, weights_path):
         self.weights_path = weights_path
-        if self.is_inference_running():
-            self.backend.stop_eventmamba()
-            return True
-        return False
+        return self.weights_path
 
     def load_model(self):
+        """Start only the blocking inference backend phase.
+
+        NetworkThread is a Qt object, so the view starts it separately on the
+        UI thread after this worker operation succeeds.
+        """
         if not self.weights_path:
             raise ValueError("weights_path is required")
-        self.backend.start_eventmamba(self.weights_path)
+        return self.backend.start_eventmamba_backend(self.weights_path)
+
+    def start_model_network(self):
+        """Create NetworkThread on the caller's (UI) thread."""
+        return self.backend.start_eventmamba_network()
+
+    def stop_model_network(self):
+        """Destroy NetworkThread on the caller's (UI) thread."""
+        return self.backend.stop_eventmamba_network()
 
     def unload_model(self):
-        self.backend.stop_eventmamba()
+        """Stop only the blocking inference backend phase."""
+        return self.backend.stop_eventmamba_backend()
+
+    def restart_model(self):
+        if not self.weights_path:
+            raise ValueError("weights_path is required")
+        return self.backend.restart_eventmamba_backend()
+
+    def cancel_model_start(self):
+        return self.backend.cancel_eventmamba_start()
 
     def apply_settings(self, roi, mode, filter_type, threshold_us):
         previous = self.settings.playback_config
@@ -112,13 +148,21 @@ class AppController:
             self.backend.update_playback_config(current)
         return changed
 
-    def set_prediction_mode(self, mode):
-        self.settings.update_prediction(mode)
-        self.backend.set_prediction_mode(mode)
+    def close_ui_resources(self):
+        """Release Qt-owned resources; call this from the UI thread."""
+        errors = []
+        try:
+            self.stop_camera()
+        except Exception as exc:
+            errors.append(exc)
+        try:
+            self.stop_model_network()
+        except Exception as exc:
+            errors.append(exc)
+        if errors:
+            raise RuntimeError("; ".join(str(error) for error in errors))
+        return True
 
-    def update_camera_roi(self, roi):
-        self.settings.update_roi(roi)
-        self.backend.update_playback_config(self.settings.playback_config)
-
-    def close(self):
-        self.backend.close()
+    def close_backend_resources(self):
+        """Release the blocking backend process; call this from a worker."""
+        return self.unload_model()

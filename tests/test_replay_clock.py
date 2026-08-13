@@ -1,6 +1,12 @@
 import pytest
 
-from backend.replay_clock import ReplayClock, frame_interval_us, normalize_fps, replay_sleep_s, should_reset_replay_clock
+from backend.replay_clock import (
+    ReplayClock,
+    clamp_fraction,
+    frame_interval_us,
+    normalize_fps,
+    should_reset_replay_clock,
+)
 
 
 def test_frame_interval_us_uses_default_for_invalid_fps():
@@ -55,17 +61,6 @@ def test_replay_clock_replay_factor_keeps_later_frames_on_speed_curve():
 
     assert clock.sleep_time_s(140000, now=0.0) == pytest.approx(0.02)
     assert clock.sleep_time_s(160000, now=0.02) == pytest.approx(0.01)
-
-
-def test_replay_clock_updates_frame_interval_for_next_frame():
-    clock = ReplayClock.start(first_sensor_time=100000, frame_interval_us=20000, now=0.0)
-
-    changed = clock.update_frame_interval_us(10000)
-    clock.advance_frame()
-
-    assert changed is True
-    assert clock.frame_interval_us == 10000
-    assert clock.next_frame_time == 130000
 
 
 def test_replay_clock_reschedules_next_frame_from_anchor():
@@ -132,12 +127,14 @@ def test_replay_clock_sleep_until_resets_when_lagging():
     assert clock.start_real_time == 10.5
 
 
-def test_replay_sleep_helpers():
-    assert replay_sleep_s(
-        target_sensor_time=120000,
-        start_sensor_time=100000,
-        start_real_time=10.0,
-        now=10.005,
-    ) == pytest.approx(0.015)
+def test_clamp_fraction_handles_invalid_and_out_of_range_values():
+    assert clamp_fraction(None) == 0.0
+    assert clamp_fraction("bad") == 0.0
+    assert clamp_fraction(-0.5) == 0.0
+    assert clamp_fraction(0.25) == 0.25
+    assert clamp_fraction(1.5) == 1.0
+
+
+def test_should_reset_replay_clock_uses_lag_threshold():
     assert should_reset_replay_clock(-0.25)
     assert not should_reset_replay_clock(-0.1)

@@ -35,7 +35,3 @@ def validate_model_asset(mode, weights_path, exists=os.path.exists):
             raise FileNotFoundError(f"椭圆模式缺少 matrix_A.pt，请将其放在权重同目录下: {matrix_path}")
 
     return ModelAsset(mode=mode, weights_path=weights_path, matrix_path=matrix_path)
-
-
-def weights_for_mode(mode, center_weights=None, ellipse_weights=None):
-    return ellipse_weights if mode == MODE_ELLIPSE else center_weights

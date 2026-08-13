@@ -2,17 +2,13 @@ import logging
 import time
 from threading import Event
 
+from backend.event_processing import normalize_roi
 from backend.replay_speed import normalize_replay_factor
 
 LOGGER = logging.getLogger(__name__)
 
 
 MAX_DYNAMIC_REPLAY_SLEEP_S = 0.05
-
-
-def metavision_replay_factor(speed_factor):
-    speed_factor = max(float(speed_factor or 1.0), 0.001)
-    return 1.0 / speed_factor
 
 
 class DynamicReplayEventsIterator:
@@ -114,25 +110,55 @@ def create_metavision_iterator(
 
 def apply_hardware_roi(device, roi, status_callback=None):
     if device is None:
-        return
+        return None
 
-    x, y, width, height = roi or (None, None, None, None)
-    if x is None:
+    if roi is None:
         _report(status_callback, "[ROI] No ROI configured; skipping hardware ROI")
-        return
+        return None
+
+    geometry_getter = getattr(device, "get_i_geometry", None)
+    geometry = geometry_getter() if callable(geometry_getter) else None
+    if geometry is None:
+        _report(
+            status_callback,
+            "[ROI] Device geometry is unavailable; using software ROI only",
+        )
+        return None
+    try:
+        sensor_width = int(geometry.get_width())
+        sensor_height = int(geometry.get_height())
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        _report(
+            status_callback,
+            "[ROI] Device geometry is invalid; using software ROI only",
+        )
+        return None
+
+    normalized_roi = normalize_roi(roi, sensor_width, sensor_height)
+    if normalized_roi is None:
+        _report(
+            status_callback,
+            "[ROI] ROI is outside the sensor; using software fallback",
+        )
+        return None
+    x, y, width, height = normalized_roi
 
     i_roi = device.get_i_roi()
     if i_roi is None:
         _report(status_callback, "[ROI] Device does not support hardware ROI; skipping")
-        return
+        return None
 
     from libs import metavision_hal
 
     _report(status_callback, "[ROI] Hardware ROI is supported; applying ROI")
-    roi_window = metavision_hal.I_ROI.Window(x, y, x + width, y + height)
-    i_roi.set_window(roi_window)
-    i_roi.enable(True)
+    # Metavision HAL expects (x, y, width, height), not corner coordinates.
+    roi_window = metavision_hal.I_ROI.Window(x, y, width, height)
+    if i_roi.set_window(roi_window) is False:
+        raise RuntimeError("Metavision rejected the hardware ROI window")
+    if i_roi.enable(True) is False:
+        raise RuntimeError("Metavision failed to enable hardware ROI")
     _report(status_callback, f"[ROI] Applied ROI: x={x}, y={y}, width={width}, height={height}")
+    return normalized_roi
 
 
 def run_metavision_event_loop(

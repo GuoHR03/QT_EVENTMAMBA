@@ -56,6 +56,37 @@ def collect_directory_dlls(source_dir, destination):
     ]
 
 
+def collect_required_nvidia_dlls():
+    """Collect only the CUDA/cuDNN DLLs used by the ONNX CUDA provider."""
+    groups = {
+        "nvidia/cu13/bin/x86_64": (
+            "cublas64_13.dll",
+            "cublasLt64_13.dll",
+            "cudart64_13.dll",
+            "cufft64_12.dll",
+        ),
+        "nvidia/cudnn/bin": (
+            "cudnn64_9.dll",
+            "cudnn_adv64_9.dll",
+            "cudnn_cnn64_9.dll",
+            "cudnn_engines_precompiled64_9.dll",
+            "cudnn_engines_runtime_compiled64_9.dll",
+            "cudnn_graph64_9.dll",
+            "cudnn_heuristic64_9.dll",
+            "cudnn_ops64_9.dll",
+        ),
+    }
+    result = []
+    for destination, names in groups.items():
+        source_dir = site_packages / Path(destination)
+        for name in names:
+            path = source_dir / name
+            if not path.is_file():
+                raise SystemExit(f"Required ONNX CUDA runtime DLL is missing: {path}")
+            result.append((str(path), destination))
+    return result
+
+
 def optional_conda_binary(name):
     path = conda_bin / name
     if path.is_file():
@@ -96,7 +127,7 @@ def optional_cuda_12_runtime():
 binaries = []
 binaries += collect_dynamic_libs("onnxruntime")
 binaries += collect_dynamic_libs("numpy")
-binaries += collect_dynamic_libs("nvidia")
+binaries += collect_required_nvidia_dlls()
 binaries += collect_directory_dlls(site_packages / "numpy.libs", "numpy.libs")
 binaries += collect_directory_dlls(site_packages / "pyzmq.libs", ".")
 binaries += sum(
@@ -134,12 +165,9 @@ metadata_distributions = (
     "numpy",
     "pyzmq",
     "nvidia-cublas",
-    "nvidia-cuda-nvrtc",
     "nvidia-cuda-runtime",
     "nvidia-cudnn-cu13",
     "nvidia-cufft",
-    "nvidia-curand",
-    "nvidia-nvjitlink",
 )
 for distribution in metadata_distributions:
     try:

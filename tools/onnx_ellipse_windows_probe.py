@@ -2,14 +2,23 @@
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from backend.ellipse_decoder import decode_ellipse_vsa
 from backend.windows_onnx_runtime import prepare_windows_cuda_runtime
+
+
+LEGACY_INPUT_NAMES = {"events", "fps0", "fps1", "fps2"}
+NATIVE_FPS_INPUT_NAMES = {"events", "fps_starts"}
 
 
 def main():
@@ -34,10 +43,29 @@ def main():
         raise RuntimeError(f"Provider fell back to {session.get_providers()[0]}")
 
     reference = np.load(args.reference)
-    inputs = {
-        name: np.ascontiguousarray(reference[name])
-        for name in ("events", "fps0", "fps1", "fps2")
-    }
+    input_names = {item.name for item in session.get_inputs()}
+    if input_names == LEGACY_INPUT_NAMES:
+        fps_mode = "legacy-python"
+        inputs = {
+            name: np.ascontiguousarray(reference[name])
+            for name in ("events", "fps0", "fps1", "fps2")
+        }
+    elif input_names == NATIVE_FPS_INPUT_NAMES:
+        fps_mode = "native-custom-op"
+        starts = np.asarray(
+            [
+                int(reference["fps0"][0, 0]),
+                int(reference["fps1"][0, 0]),
+                int(reference["fps2"][0, 0]),
+            ],
+            dtype=np.int64,
+        )
+        inputs = {
+            "events": np.ascontiguousarray(reference["events"]),
+            "fps_starts": starts[None],
+        }
+    else:
+        raise RuntimeError(f"Unsupported model inputs: {sorted(input_names)}")
     session.run(None, inputs)
     times = []
     actual_raw = None
@@ -61,6 +89,7 @@ def main():
     result = {
         "status": "verified" if raw_allclose and decoded_allclose else "mismatch",
         "provider": session.get_providers()[0],
+        "fps_mode": fps_mode,
         "raw_output_shape": list(actual_raw.shape),
         "raw_max_abs_error": raw_error,
         "decoded_output": actual_decoded.tolist(),

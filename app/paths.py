@@ -2,10 +2,7 @@ import os
 import sys
 from pathlib import Path
 
-try:
-    from .bootstrap import runtime_dirs
-except ImportError:
-    from bootstrap import runtime_dirs
+from .bootstrap import runtime_dirs
 
 
 def project_root():

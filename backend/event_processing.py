@@ -73,17 +73,27 @@ def event_time_field(events):
 
 
 def normalize_roi(roi, src_width, src_height):
-    if not roi:
+    if roi is None:
         return None
 
-    x, y, width, height = [int(v) for v in roi]
-    if width <= 0 or height <= 0:
+    try:
+        x, y, width, height = [int(v) for v in roi]
+        src_width = int(src_width)
+        src_height = int(src_height)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if width <= 0 or height <= 0 or src_width <= 0 or src_height <= 0:
         return None
 
-    x1 = max(0, min(src_width - 1, x))
-    y1 = max(0, min(src_height - 1, y))
-    x2 = max(x1 + 1, min(src_width, x + width))
-    y2 = max(y1 + 1, min(src_height, y + height))
+    # Intersect the requested half-open rectangle with the sensor. An ROI
+    # entirely outside the sensor is invalid; forcing it into a 1-pixel strip
+    # would silently move the user's coordinates to an unrelated edge.
+    x1 = max(0, x)
+    y1 = max(0, y)
+    x2 = min(src_width, x + width)
+    y2 = min(src_height, y + height)
+    if x2 <= x1 or y2 <= y1:
+        return None
     return x1, y1, x2 - x1, y2 - y1
 
 
@@ -104,7 +114,7 @@ def empty_normalized_events():
     return empty, empty, empty
 
 
-def downsample_roi_normalize_events(data_numpy, roi, src_width=640, src_height=480):
+def downsample_roi_normalize_events(data_numpy, roi):
     if data_numpy is None or len(data_numpy) == 0 or not roi:
         return empty_normalized_events()
 
@@ -139,7 +149,7 @@ def downsample_crop_normalize_events(data_numpy, src_width=640, src_height=480, 
     x_raw = np.clip(x_raw, 0, 640 - 1)
     y_raw = np.clip(y_raw, 0, 480 - 1)
 
-    mask = (x_raw >= 96) & (x_raw <= 608)
+    mask = (x_raw >= 96) & (x_raw < 608)
     if not np.any(mask):
         return empty_normalized_events()
 
@@ -206,8 +216,6 @@ def build_inference_payload(
         x_norm, y_norm, t_norm = downsample_roi_normalize_events(
             nn_events,
             roi,
-            src_width=width,
-            src_height=height,
         )
         cropped = True
     elif fallback_normalization == "full":

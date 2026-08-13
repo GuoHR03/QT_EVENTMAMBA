@@ -12,6 +12,57 @@ from backend.settings import DEFAULT_SENSOR_HEIGHT, DEFAULT_SENSOR_WIDTH
 from backend.windows_onnx_runtime import prepare_windows_cuda_runtime
 
 
+FPS_CONTRACT_NATIVE = "native"
+FPS_CONTRACT_LEGACY = "legacy"
+
+_EVENT_INPUT_SHAPE = (1, 3, 1024)
+_NATIVE_INPUT_SPEC = {
+    "events": (_EVENT_INPUT_SHAPE, "tensor(float)"),
+    "fps_starts": ((1, 3), "tensor(int64)"),
+}
+_LEGACY_INPUT_SPEC = {
+    "events": (_EVENT_INPUT_SHAPE, "tensor(float)"),
+    "fps0": ((1, 512), "tensor(int64)"),
+    "fps1": ((1, 256), "tensor(int64)"),
+    "fps2": ((1, 128), "tensor(int64)"),
+}
+
+
+def _model_input_contract(model_inputs, mode_name):
+    input_by_name = {item.name: item for item in model_inputs}
+    actual_names = set(input_by_name)
+    if len(input_by_name) != len(model_inputs):
+        raise RuntimeError(f"Duplicate {mode_name} model input names")
+
+    if actual_names == set(_NATIVE_INPUT_SPEC):
+        contract = FPS_CONTRACT_NATIVE
+        expected_spec = _NATIVE_INPUT_SPEC
+    elif actual_names == set(_LEGACY_INPUT_SPEC):
+        contract = FPS_CONTRACT_LEGACY
+        expected_spec = _LEGACY_INPUT_SPEC
+    else:
+        raise RuntimeError(
+            f"Unexpected {mode_name} model inputs: {sorted(actual_names)}; "
+            f"expected {sorted(_NATIVE_INPUT_SPEC)} or "
+            f"{sorted(_LEGACY_INPUT_SPEC)}"
+        )
+
+    for name, (expected_shape, expected_type) in expected_spec.items():
+        item = input_by_name[name]
+        actual_shape = tuple(item.shape)
+        if actual_shape != expected_shape:
+            raise RuntimeError(
+                f"Unexpected {mode_name} model input shape for {name}: "
+                f"{actual_shape}; expected {expected_shape}"
+            )
+        if item.type != expected_type:
+            raise RuntimeError(
+                f"Unexpected {mode_name} model input type for {name}: "
+                f"{item.type}; expected {expected_type}"
+            )
+    return contract
+
+
 def furthest_point_sample_indices(points, count, rng):
     points = np.asarray(points, dtype=np.float32)
     if points.ndim != 2:
@@ -38,6 +89,15 @@ def build_fps_inputs(events, rng):
     xyz2 = xyz1[np.sort(fps1)]
     fps2 = furthest_point_sample_indices(xyz2, 128, rng)
     return fps0[None], fps1[None], fps2[None]
+
+
+def build_fps_starts(rng):
+    """Return the three RNG starts consumed by hierarchical native FPS."""
+    starts = np.empty((1, 3), dtype=np.int64)
+    starts[0, 0] = rng.integers(0, 1024)
+    starts[0, 1] = rng.integers(0, 512)
+    starts[0, 2] = rng.integers(0, 256)
+    return starts
 
 
 class WindowsOnnxPredictor:
@@ -73,17 +133,16 @@ class WindowsOnnxPredictor:
             raise RuntimeError(
                 f"ONNX Runtime fell back to {self.session.get_providers()[0]}"
             )
-        expected_names = {"events", "fps0", "fps1", "fps2"}
-        actual_names = {item.name for item in self.session.get_inputs()}
-        if actual_names != expected_names:
-            raise RuntimeError(
-                f"Unexpected {self.mode_name} model inputs: {sorted(actual_names)}"
-            )
+        self.fps_contract = _model_input_contract(
+            self.session.get_inputs(),
+            self.mode_name,
+        )
         self.rng = np.random.default_rng(seed)
         self.load_message = (
             f"Windows ONNX CUDA {self.mode_name} model loaded\n"
             f"Model: {self.model_path}\n"
-            f"Provider: {self.session.get_providers()[0]}"
+            f"Provider: {self.session.get_providers()[0]}\n"
+            f"FPS: {self.fps_contract}"
         )
 
     def run_model(self, event_data):
@@ -93,16 +152,23 @@ class WindowsOnnxPredictor:
                 f"{self.mode_name} model requires event shape (1024, 3), "
                 f"got {event_data.shape}"
             )
-        fps0, fps1, fps2 = build_fps_inputs(event_data, self.rng)
-        return self.session.run(
-            None,
-            {
-                "events": event_data.T[None],
-                "fps0": fps0,
-                "fps1": fps1,
-                "fps2": fps2,
-            },
-        )[0]
+        inputs = {
+            "events": np.ascontiguousarray(event_data.T[None], dtype=np.float32),
+        }
+        if self.fps_contract == FPS_CONTRACT_NATIVE:
+            inputs["fps_starts"] = build_fps_starts(self.rng)
+        elif self.fps_contract == FPS_CONTRACT_LEGACY:
+            fps0, fps1, fps2 = build_fps_inputs(event_data, self.rng)
+            inputs.update(
+                {
+                    "fps0": fps0,
+                    "fps1": fps1,
+                    "fps2": fps2,
+                }
+            )
+        else:
+            raise RuntimeError(f"Unsupported FPS input contract: {self.fps_contract}")
+        return self.session.run(None, inputs)[0]
 
 
 class WindowsOnnxCenterPredictor(WindowsOnnxPredictor):

@@ -1,20 +1,4 @@
-from backend.palettes import aedat4_rgb_palette, apply_aedat4_palette, metavision_palette
-
-
-class FakeVisualizer:
-    def __init__(self):
-        self.bg = None
-        self.pos = None
-        self.neg = None
-
-    def setBackgroundColor(self, value):
-        self.bg = value
-
-    def setPositiveColor(self, value):
-        self.pos = value
-
-    def setNegativeColor(self, value):
-        self.neg = value
+from backend.palettes import aedat4_rgb_palette, metavision_palette
 
 
 class FakeColorPalette:
@@ -57,16 +41,6 @@ def test_aedat4_rgb_palettes_match_metavision_sdk_colors():
 
 def test_aedat4_rgb_palette_falls_back_to_dark():
     assert aedat4_rgb_palette("Unknown") == aedat4_rgb_palette("Dark")
-
-
-def test_apply_aedat4_palette_updates_visualizer():
-    visualizer = FakeVisualizer()
-
-    apply_aedat4_palette(visualizer, "Gray")
-
-    assert visualizer.bg == (128, 128, 128)
-    assert visualizer.pos == (255, 255, 255)
-    assert visualizer.neg == (0, 0, 0)
 
 
 def test_metavision_palette_maps_names_and_falls_back():

@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.models.eventmamba_v1 import EventMamba
-from backend.models.modules import furthest_point_sample, index_points, square_distance
+from backend.models.modules import furthest_point_sample, index_points
 from tools.onnx_feasibility import _extract_state_dict
 from tools.onnx_mamba_component_probe import ReferenceBiMambaV2
 

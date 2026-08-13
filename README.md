@@ -6,12 +6,13 @@
 
 - Windows 原生后端支持 `center` 中心点预测，输出 `(x, y)`
 - Windows 原生后端支持 `ellipse` 椭圆预测，输出 `[x, y, a, b, angle]`
-- 支持 `RAW / HDF5 / H5 / AEDAT4` 离线回放
+- 主界面将 `RAW` 作为正式离线回放格式；HDF5/H5/AEDAT4 保留为兼容输入
 - `RAW / H5` 使用 Metavision `PeriodicFrameGenerationAlgorithm` 生成事件帧
 - `AEDAT4` 使用项目内置 `EventFrameRenderer`，颜色与 Metavision SDK 调色板保持一致
 - 两类 renderer 实现统一 `FrameRenderer` 接口，支持显示设置、reset 和 close 生命周期
 - 支持 Activity / Trail / STC / AntiFlicker 等 Metavision 去噪配置
-- 支持播放倍速、Palette、FPS 在播放过程中热更新，避免重新打开文件
+- 实时相机与 RAW 文件使用明确的输入模式；实时模式隐藏回放进度和倍速，RAW 模式显示这些控件并禁用录制
+- 支持 RAW 播放倍速、Palette、FPS 在播放过程中热更新，避免重新打开文件
 - 使用不可变 `PlaybackConfig` 统一 FPS、Palette、倍速、ROI、去噪和推理窗口配置
 - 离线文件的软件 ROI 与去噪支持播放中热更新，不重建 reader、不重置进度
 - 支持离线文件播放进度条、总时长显示和拖拽定位回放
@@ -31,17 +32,22 @@
 - 默认由 Windows 端同时负责 UI、相机、显示和 ONNX/CUDA 模型推理
 - Windows 安装版内置独立的 `backend_runtime/UI_Event_Backend.exe`、模型和推理运行库
 - 源码运行时仍可通过环境变量显式切换到原有 WSL 推理后端
+- 推理服务提供启动、停止、重启和错误状态；耗时操作在工作线程执行，不阻塞 Qt 主线程
+- 每次后端启动使用独立 nonce/PID 健康检查，WSL 仅终止当前实例，不再使用广域 `pkill`
+- 切源、seek 和相机重启会推进请求代际；旧画面、旧进度和在途推理响应不会混入新源，真实分辨率就绪后才发送推理 `CONFIG`
+- `NetworkThread` 始终由 Qt 主线程创建和销毁，后端进程启停由工作线程执行；关闭清理失败时保留窗口与进程句柄，允许显式重试
 
 ## 功能介绍
 
 ### 输入源与回放
 
-- 实时 Metavision 相机：直接从设备读取事件流，支持硬件 ROI 尝试配置。
+- 实时 Metavision 相机：直接从设备读取事件流，支持硬件 ROI 尝试配置和 RAW 录制；不显示回放进度、seek 或倍速。
 - `.raw` 文件：使用 Metavision `EventsIterator` 读取事件，并按事件时间戳进行真实时间回放。
 - `.h5/.hdf5` 文件：自动识别事件字段，按统一事件格式转换后进行回放和推理。
 - `.aedat4` 文件：使用 `dv_processing` 读取事件批次，再转换为统一事件格式进行显示、去噪和推理。
 - 三种格式对外返回统一 `SourceMetadata`；RAW 可从 sidecar 获取时长，H5/AEDAT4 直接读取文件内部元数据。
 - 离线回放支持进度条显示当前时间/总时长，并可拖拽到目标位置继续播放。
+- 设置面板提供“实时相机”和“选择 RAW 文件”两个入口，切源时会停止旧线程、清空待显示数据并复位进度；可随时切回实时相机。
 
 ### 可视化
 
@@ -87,18 +93,21 @@ UI_Event/
 │   ├── prediction_state.py    # 预测缓存与时间匹配
 │   ├── prediction_overlay.py  # 预测结果绘制
 │   ├── file_dialogs.py        # 文件选择
+│   ├── inference_operation.py # 非阻塞推理启停/重启任务
 │   ├── paths.py               # 默认路径
 │   ├── settings.py            # 应用设置
 │   ├── theme.py               # 样式
 │   ├── ui_log.py              # 日志级别识别
 │   ├── ui_status.py           # 输入源状态显示
-│   ├── form.ui
-│   └── choose_form.ui
+│   └── form.ui
 ├── backend/
 │   ├── api.py                 # 后端统一门面
 │   ├── camera_service.py      # 相机线程生命周期与配置
 │   ├── inference_service.py   # Windows/WSL 推理服务管理
+│   ├── backend_process.py     # 公共子进程所有权与停止语义
+│   ├── inference_server.py    # 公共 ZMQ 服务与实例握手
 │   ├── windows_process.py     # Windows 后端进程生命周期
+│   ├── wsl_process.py         # WSL 精确 PID/nonce 生命周期
 │   ├── windows_onnx_runtime.py # ONNX Runtime CUDA DLL 准备
 │   ├── windows_onnx_predictor.py # Windows ONNX 中心点/椭圆推理
 │   ├── ellipse_decoder.py     # 不依赖 PyTorch 的 VSA 椭圆解码
@@ -127,9 +136,10 @@ UI_Event/
 │   ├── realtime_inference.py  # 注册式模型推理入口
 │   ├── eventmamba_predictors.py # EventMamba 加载、推理与解码
 │   ├── predictor_registry.py  # Predictor 规格与模式注册表
-│   ├── protocol.py            # 后端消息协议
+│   ├── protocol.py            # 后端业务响应结构
+│   ├── zmq_protocol.py        # 严格 JSON + float32 二进制线协议
 │   └── models/
-├── libs/                      # Metavision 运行依赖
+├── libs/                      # 源码模式 Metavision Python/Release 运行依赖
 ├── checkpoint/                # 模型权重目录
 ├── artifacts/                 # 转换后的 ONNX 模型（本机产物）
 ├── native/selective_scan_ort/ # Windows selective_scan 自定义算子
@@ -159,7 +169,7 @@ QtCreator 中也建议将启动脚本设置为 `main.py`。
 .\scripts\build_installer.ps1 -Clean -SkipInstaller
 ```
 
-启动文件为 `dist/UI_Event/UI_Event.exe`。必须整体保留 `dist/UI_Event/`，不能单独复制 EXE。
+启动文件为 `dist/UI_Event/UI_Event.exe`。必须整体保留 `dist/UI_Event/`，不能单独复制 EXE。正式包只收集 CPython 3.8 Metavision 扩展和实际依赖的 Release DLL/插件，不包含 Debug 库、CPython 3.9 扩展、SDK 命令行示例、源码目录或缓存。
 
 构建安装程序：
 
@@ -193,8 +203,8 @@ QtCreator 中也建议将启动脚本设置为 `main.py`。
 EVENTMAMBA_INFERENCE_RUNTIME=windows
 EVENTMAMBA_WINDOWS_PYTHON=.venv-onnx-win/Scripts/python.exe
 EVENTMAMBA_WINDOWS_BACKEND_EXECUTABLE=backend_runtime/UI_Event_Backend.exe
-EVENTMAMBA_CENTER_ONNX_MODEL=artifacts/eventmamba_center_selective_scan_cuda.onnx
-EVENTMAMBA_ELLIPSE_ONNX_MODEL=artifacts/eventmamba_ellipse_selective_scan_cuda.onnx
+EVENTMAMBA_CENTER_ONNX_MODEL=artifacts/eventmamba_center_native_fps.onnx
+EVENTMAMBA_ELLIPSE_ONNX_MODEL=artifacts/eventmamba_ellipse_native_fps.onnx
 EVENTMAMBA_ELLIPSE_MATRIX=artifacts/eventmamba_ellipse_matrix_A.npy
 EVENTMAMBA_SELECTIVE_SCAN_DLL=native/selective_scan_ort/bin/eventmamba_selective_scan.dll
 EVENTMAMBA_BACKEND_READY_TIMEOUT_S=180
@@ -209,16 +219,22 @@ EVENTMAMBA_WSL_DISTRO=EventMamba_mini
 EVENTMAMBA_LINUX_PYTHON=/opt/miniconda3/envs/eventmamba/bin/python
 ```
 
+UI 与推理后端使用 `eventmamba/v1` ZMQ 协议：控制消息为受限 JSON，事件数据为固定 `(1024, 3)` 的 little-endian `float32` 二进制帧；通信边界不接受 pickle 或旧版对象序列化回退。WSL 后端默认只监听 `127.0.0.1`。该协议与旧发布物不兼容，更新后必须同时重建并替换 UI 与 backend，不能混用新旧可执行文件。
+
 ## 模型文件
 
 Windows 推理需要两个转换后的 ONNX 模型、椭圆解码矩阵和匹配的自定义 CUDA DLL。默认位置为：
 
 ```text
-artifacts/eventmamba_center_selective_scan_cuda.onnx
-artifacts/eventmamba_ellipse_selective_scan_cuda.onnx
+artifacts/eventmamba_center_native_fps.onnx
+artifacts/eventmamba_ellipse_native_fps.onnx
 artifacts/eventmamba_ellipse_matrix_A.npy
 native/selective_scan_ort/bin/eventmamba_selective_scan.dll
 ```
+
+默认模型把三级最远点采样放进 `com.eventmamba::HierarchicalFarthestPointSampling`
+原生算子；Python 只提供事件张量和三个随机起点。模型与 DLL 必须配套更新。
+旧的 `*_selective_scan_cuda.onnx` 四输入模型仅作为源码模式回退，不进入默认发布包。
 
 0.2.0 构建脚本会把这四项复制到发布根目录中的相同相对路径，并在生成安装器前检查其存在性。WSL 源码兼容模式的 `ellipse` 仍需要权重文件同目录下存在 `matrix_A.pt`：
 

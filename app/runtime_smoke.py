@@ -2,14 +2,11 @@ import sys
 import traceback
 from pathlib import Path
 
+from .bootstrap import app_resource_path, configure_runtime
+
 
 def run_packaged_runtime_smoke_test():
     """Exercise optional native runtimes without opening the interactive UI."""
-    try:
-        from .bootstrap import app_resource_path, configure_runtime
-    except ImportError:
-        from bootstrap import app_resource_path, configure_runtime
-
     configure_runtime(__file__)
 
     import dv_processing
