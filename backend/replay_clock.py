@@ -12,15 +12,17 @@ def normalize_fps(fps, default_fps=DEFAULT_FPS):
     return fps if fps > 0 else default_fps
 
 
+def clamp_fraction(value):
+    try:
+        fraction = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, fraction))
+
+
 def frame_interval_us(fps, default_fps=DEFAULT_FPS):
     fps = normalize_fps(fps, default_fps)
     return int(1_000_000 / fps)
-
-
-def replay_sleep_s(target_sensor_time, start_sensor_time, start_real_time, now):
-    sensor_elapsed_s = (target_sensor_time - start_sensor_time) / 1_000_000.0
-    real_elapsed_s = now - start_real_time
-    return sensor_elapsed_s - real_elapsed_s
 
 
 def should_reset_replay_clock(sleep_time, threshold_s=-0.2):
@@ -46,11 +48,6 @@ class ReplayClock:
             replay_factor=max(float(replay_factor or 1.0), 0.001),
         )
 
-    def reset_origin(self, sensor_time, now):
-        self.start_sensor_time = int(sensor_time)
-        self.start_real_time = now
-        self.next_frame_time = self.start_sensor_time + self.frame_interval_us
-
     def update_replay_factor(self, replay_factor, sensor_time, now):
         replay_factor = normalize_replay_factor(replay_factor)
         if replay_factor == self.replay_factor:
@@ -58,13 +55,6 @@ class ReplayClock:
         self.replay_factor = replay_factor
         self.start_sensor_time = int(sensor_time)
         self.start_real_time = now
-        return True
-
-    def update_frame_interval_us(self, frame_interval_us):
-        frame_interval_us = int(frame_interval_us)
-        if frame_interval_us == self.frame_interval_us:
-            return False
-        self.frame_interval_us = frame_interval_us
         return True
 
     def reschedule_next_frame(self, frame_interval_us, anchor_sensor_time):

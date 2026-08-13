@@ -28,13 +28,6 @@ def aedat4_rgb_palette(name):
     return AEDAT4_RGB_PALETTES.get(name, AEDAT4_RGB_PALETTES["Dark"])
 
 
-def apply_aedat4_palette(visualizer, name):
-    rgb = aedat4_rgb_palette(name)
-    visualizer.setBackgroundColor(rgb["bg"])
-    visualizer.setPositiveColor(rgb["pos"])
-    visualizer.setNegativeColor(rgb["neg"])
-
-
 def metavision_palette(color_palette, name):
     palette_map = {
         "Dark": color_palette.Dark,

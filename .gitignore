@@ -32,6 +32,12 @@ wsl/*.tar
 wsl/*/
 artifacts/*.onnx
 artifacts/*.npz
+artifacts/*.npy
+!artifacts/eventmamba_center_selective_scan_cuda.onnx
+!artifacts/eventmamba_ellipse_selective_scan_cuda.onnx
+!artifacts/eventmamba_center_native_fps.onnx
+!artifacts/eventmamba_ellipse_native_fps.onnx
+!artifacts/eventmamba_ellipse_matrix_A.npy
 .venv-onnx-win/
 .onnx-wheel-cache/
 .native-cache/
@@ -42,6 +48,7 @@ onnxruntime_profile__*.json
 *.spec
 *.iss
 !UI_Event.spec
+!UI_Event_Backend.spec
 !installer.iss
 
 # Helper scripts kept in source

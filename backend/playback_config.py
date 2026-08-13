@@ -72,7 +72,7 @@ def _normalize_roi_tuple(roi):
         return None
     try:
         x, y, width, height = [int(value) for value in roi]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if width <= 0 or height <= 0:
         return None

@@ -4,9 +4,6 @@ from backend.event_source import Aedat4Source, H5Source, MetavisionSource, Sourc
 from backend.renderer_factory import (
     DynamicMetavisionFrameGenerator,
     MetavisionFrameRenderer,
-    _create_periodic_frame_generator,
-    _instantiate_periodic_frame_generator,
-    _set_accumulation_time_if_supported,
     create_metavision_frame_generator,
     create_metavision_renderer,
 )
@@ -20,8 +17,6 @@ from backend.source_metadata import (
     SOURCE_AEDAT4,
     SOURCE_H5,
     SOURCE_METAVISION,
-    aedat4_resolution as _aedat4_resolution,
-    aedat4_time_range as _aedat4_time_range,
     classify_input_source,
 )
 

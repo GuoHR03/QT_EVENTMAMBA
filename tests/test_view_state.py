@@ -1,4 +1,6 @@
-from app.view_state import MainViewState
+from types import SimpleNamespace
+
+from app.view_state import MainViewState, source_is_file
 
 
 class FakeStyle:
@@ -47,11 +49,13 @@ class FakeView:
         self.record_button = FakeButton()
         self.load_model_button = FakeButton()
         self.unload_model_button = FakeButton()
+        self.restart_model_button = FakeButton()
         self.select_weight_button = FakeButton()
         self.input_file_label = FakeLabel()
         self.weight_path_label = FakeLabel()
         self.statuses = []
         self.source_paths = []
+        self.controller = SimpleNamespace(source_mode="live", input_file_path=None)
 
     def set_runtime_status(self, target, text, state):
         self.statuses.append((target, text, state))
@@ -83,17 +87,63 @@ def test_view_state_updates_camera_and_recording_visual_roles():
     assert ("camera", "已停止", "idle") in view.statuses
 
 
+def test_file_mode_uses_playback_labels_and_disables_recording():
+    view = FakeView()
+    view.controller.source_mode = "raw"
+    view.controller.input_file_path = "C:/records/events.raw"
+    state = MainViewState(view)
+
+    state.set_camera_running()
+
+    assert view.start_camera_button.text == "停止播放"
+    assert view.record_button.enabled is False
+
+
 def test_view_state_updates_model_status_and_selected_paths():
     view = FakeView()
     state = MainViewState(view)
 
-    state.set_model_loading()
-    state.set_model_loaded()
-    state.set_input_file("C:/records/events.aedat4")
+    state.set_model_starting()
+    state.set_model_running()
+    state.set_input_file("C:/records/events.raw")
     state.set_weight_file("C:/models/model.pth")
 
-    assert ("model", "模型加载中", "pending") in view.statuses
-    assert ("model", "模型已加载", "active") in view.statuses
-    assert view.input_file_label.text == "events.aedat4"
+    assert ("model", "推理启动中", "pending") in view.statuses
+    assert ("model", "推理运行中", "active") in view.statuses
+    assert view.restart_model_button.enabled is True
+    assert view.select_weight_button.enabled is False
+    assert view.input_file_label.text == "events.raw"
     assert view.weight_path_label.text == "model.pth"
-    assert view.source_paths == ["C:/records/events.aedat4"]
+    assert view.source_paths == ["C:/records/events.raw"]
+
+    state.set_model_error()
+    assert view.load_model_button.text == "重试启动"
+    assert view.unload_model_button.enabled is True
+    assert view.restart_model_button.enabled is True
+    assert ("model", "推理错误", "danger") in view.statuses
+
+    state.set_live_camera()
+    assert view.input_file_label.text == "实时相机"
+    assert view.source_paths[-1] is None
+
+
+def test_view_state_disables_model_controls_while_stopping():
+    view = FakeView()
+    state = MainViewState(view)
+
+    state.set_model_stopping()
+
+    assert view.unload_model_button.text == "停止中..."
+    assert not view.load_model_button.enabled
+    assert not view.unload_model_button.enabled
+    assert not view.restart_model_button.enabled
+    assert ("model", "推理停止中", "pending") in view.statuses
+
+
+def test_explicit_source_mode_takes_priority_over_legacy_path():
+    controller = SimpleNamespace(source_mode="live", input_file_path="stale.raw")
+    assert not source_is_file(controller)
+
+    controller.source_mode = "raw"
+    controller.input_file_path = None
+    assert source_is_file(controller)

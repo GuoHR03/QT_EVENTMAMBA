@@ -1,7 +1,6 @@
 """Verify exporting selective scan as an ONNX Loop instead of unrolling it."""
 
 import json
-import sys
 from pathlib import Path
 from typing import List
 

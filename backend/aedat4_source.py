@@ -11,6 +11,8 @@ from backend.replay_clock import ReplayClock, frame_interval_us
 
 LOGGER = logging.getLogger(__name__)
 
+_NO_ROI = object()
+
 
 def run_aedat4_replay_loop(
     reader,
@@ -27,6 +29,7 @@ def run_aedat4_replay_loop(
 ):
     frame_interval = _active_frame_interval_us(fps, fps_getter)
     frame_buffer = []
+    frame_buffer_roi = _NO_ROI
 
     clock = None
 
@@ -59,11 +62,24 @@ def run_aedat4_replay_loop(
             current_frame_start = clock.next_frame_time - clock.frame_interval_us
             clock.reschedule_next_frame(_active_frame_interval_us(fps, fps_getter), current_frame_start)
 
-        display_events = event_pipeline.process_events(frame_events, render=False)
+        roi_snapshot = event_pipeline.current_roi_snapshot()
+        display_events = event_pipeline.process_events(
+            frame_events,
+            render=False,
+            roi_snapshot=roi_snapshot,
+        )
+        effective_roi = roi_snapshot[1]
+        if effective_roi != frame_buffer_roi:
+            frame_buffer = []
+            frame_buffer_roi = effective_roi
         if len(display_events) > 0:
             frame_buffer.append(display_events)
 
         if frame_events["t"][-1] >= clock.next_frame_time:
+            if not event_pipeline.is_roi_current(frame_buffer_roi):
+                frame_buffer = []
+                frame_buffer_roi = _NO_ROI
+                continue
             frame_buffer = _drain_frame_chunks(
                 frame_buffer,
                 clock,
@@ -74,9 +90,14 @@ def run_aedat4_replay_loop(
                 replay_factor_getter,
                 fps,
                 fps_getter,
+                frame_buffer_roi,
             )
 
-    if frame_buffer and is_running():
+    if (
+        frame_buffer
+        and is_running()
+        and event_pipeline.is_roi_current(frame_buffer_roi)
+    ):
         event_pipeline.render_events(np.ascontiguousarray(np.concatenate(frame_buffer)))
 
 
@@ -90,6 +111,7 @@ def _drain_frame_chunks(
     replay_factor_getter=None,
     fps=None,
     fps_getter=None,
+    roi=None,
 ):
     if not frame_buffer:
         clock.reschedule_next_frame(_active_frame_interval_us(fps, fps_getter), clock.next_frame_time)
@@ -103,6 +125,8 @@ def _drain_frame_chunks(
         return []
 
     while frame_chunk is not None:
+        if not event_pipeline.is_roi_current(roi):
+            return []
         clock.sleep_until(
             clock.next_frame_time,
             sleep,
@@ -112,6 +136,8 @@ def _drain_frame_chunks(
             factor_reset_sensor_time=clock.next_frame_time - clock.frame_interval_us,
         )
 
+        if not event_pipeline.is_roi_current(roi):
+            return []
         if len(frame_chunk) > 0 and is_running():
             event_pipeline.render_events(frame_chunk)
 

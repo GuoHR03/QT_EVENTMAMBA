@@ -102,6 +102,13 @@
             <number>8</number>
            </property>
            <item>
+            <widget class="QLabel" name="runtime_name_label">
+             <property name="text">
+              <string>推理后端：检测中</string>
+             </property>
+            </widget>
+           </item>
+           <item>
             <widget class="QLabel" name="weight_path_label">
              <property name="minimumSize">
               <size>
@@ -132,14 +139,21 @@
              <item>
               <widget class="QPushButton" name="load_model_button">
                <property name="text">
-                <string>加载模型</string>
+                <string>启动推理</string>
                </property>
               </widget>
              </item>
              <item>
               <widget class="QPushButton" name="unload_model_button">
                <property name="text">
-                <string>关闭模型</string>
+                <string>停止推理</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="restart_model_button">
+               <property name="text">
+                <string>重启推理</string>
                </property>
               </widget>
              </item>
@@ -174,9 +188,16 @@
             </widget>
            </item>
            <item>
+            <widget class="QPushButton" name="live_camera_button">
+             <property name="text">
+              <string>实时相机</string>
+             </property>
+            </widget>
+           </item>
+           <item>
             <widget class="QPushButton" name="select_input_file_button">
              <property name="text">
-              <string>选择文件</string>
+              <string>选择 RAW 文件</string>
              </property>
             </widget>
            </item>
@@ -210,19 +231,6 @@
            <property name="spacing">
             <number>12</number>
            </property>
-           <item>
-            <widget class="QPushButton" name="roi_window_button">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>34</height>
-              </size>
-             </property>
-             <property name="text">
-              <string>设置区域与模式</string>
-             </property>
-            </widget>
-           </item>
            <item>
             <layout class="QVBoxLayout" name="capture_settings_layout">
              <property name="spacing">

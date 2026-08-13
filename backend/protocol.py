@@ -1,6 +1,7 @@
 PREDICTION_RESPONSE = "PREDICTION"
 STATUS_RESPONSE = "STATUS"
 ERROR_RESPONSE = "ERROR"
+LOCAL_ROI_CONTEXT = "_eventmamba_effective_roi"
 
 
 def make_status_response(message, **extra):
@@ -22,13 +23,3 @@ def make_prediction_response(values, cropped=True, mode=None):
         "cropped": bool(cropped),
         "mode": mode,
     }
-
-
-def is_prediction_response(payload):
-    return isinstance(payload, dict) and payload.get("msg_type") == PREDICTION_RESPONSE
-
-
-def response_message(payload):
-    if isinstance(payload, dict):
-        return payload.get("message", str(payload))
-    return str(payload)

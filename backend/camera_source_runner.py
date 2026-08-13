@@ -15,6 +15,9 @@ class CameraRunContext:
     nn_queue: object
     noise_filter: object
     analysis_enabled: object
+    roi_snapshot_getter: object = None
+    inference_publisher: object = None
+    inference_generation_is_current: object = None
     progress_callback: object = None
 
 
@@ -34,6 +37,9 @@ def _create_event_pipeline(source, context):
         inference_queue=context.nn_queue,
         inference_interval_us=context.nn_interval_us,
         analysis_enabled=context.analysis_enabled,
+        roi_snapshot_getter=context.roi_snapshot_getter,
+        inference_publisher=context.inference_publisher,
+        inference_generation_is_current=context.inference_generation_is_current,
     )
 
 

@@ -15,7 +15,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.models.mamba_layer import MambaBlock
-from mamba_ssm.ops.selective_scan_interface import selective_scan_ref
 from tools.onnx_selective_scan_loop_probe import ScriptedSelectiveScan
 
 

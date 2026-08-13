@@ -1,11 +1,17 @@
 import queue
+import sys
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
 
 from backend.event_pipeline import EventPipeline
 from backend.event_processing import EVENT_CD_DTYPE
-from backend.metavision_source import DynamicReplayEventsIterator, metavision_replay_factor, run_metavision_event_loop
+from backend.metavision_source import (
+    DynamicReplayEventsIterator,
+    apply_hardware_roi,
+    run_metavision_event_loop,
+)
 
 
 class PassthroughFilter:
@@ -39,6 +45,121 @@ class FakeMetavisionIterator:
 
     def get_size(self):
         return 640, 480
+
+
+class FakeGeometry:
+    def __init__(self, width=1280, height=720):
+        self.width = width
+        self.height = height
+
+    def get_width(self):
+        return self.width
+
+    def get_height(self):
+        return self.height
+
+
+class FakeHardwareRoi:
+    def __init__(self, set_window_result=True, enable_result=True):
+        self.set_window_result = set_window_result
+        self.enable_result = enable_result
+        self.windows = []
+        self.enabled = []
+
+    def set_window(self, window):
+        self.windows.append(window)
+        return self.set_window_result
+
+    def enable(self, enabled):
+        self.enabled.append(enabled)
+        return self.enable_result
+
+
+class FakeDevice:
+    def __init__(self, geometry=None, i_roi=None):
+        self.geometry = geometry
+        self.i_roi = i_roi
+        self.get_i_roi_calls = 0
+
+    def get_i_geometry(self):
+        return self.geometry
+
+    def get_i_roi(self):
+        self.get_i_roi_calls += 1
+        return self.i_roi
+
+
+def install_fake_metavision_hal(monkeypatch):
+    window_calls = []
+    fake_hal = ModuleType("libs.metavision_hal")
+
+    def make_window(*args):
+        window_calls.append(args)
+        return SimpleNamespace(args=args)
+
+    fake_hal.I_ROI = SimpleNamespace(Window=make_window)
+    fake_libs = ModuleType("libs")
+    fake_libs.metavision_hal = fake_hal
+    monkeypatch.setitem(sys.modules, "libs", fake_libs)
+    monkeypatch.setitem(sys.modules, "libs.metavision_hal", fake_hal)
+    return window_calls
+
+
+def test_apply_hardware_roi_clips_to_1280x720_and_passes_width_height(monkeypatch):
+    window_calls = install_fake_metavision_hal(monkeypatch)
+    hardware_roi = FakeHardwareRoi()
+    device = FakeDevice(FakeGeometry(), hardware_roi)
+
+    applied = apply_hardware_roi(device, (-20, 700, 100, 50))
+
+    assert applied == (0, 700, 80, 20)
+    assert window_calls == [(0, 700, 80, 20)]
+    assert hardware_roi.windows[0].args == (0, 700, 80, 20)
+    assert hardware_roi.enabled == [True]
+
+
+@pytest.mark.parametrize(
+    ("set_window_result", "enable_result", "error"),
+    [
+        (False, True, "rejected the hardware ROI window"),
+        (True, False, "failed to enable hardware ROI"),
+    ],
+)
+def test_apply_hardware_roi_raises_when_hal_rejects_operation(
+    monkeypatch,
+    set_window_result,
+    enable_result,
+    error,
+):
+    install_fake_metavision_hal(monkeypatch)
+    hardware_roi = FakeHardwareRoi(set_window_result, enable_result)
+    device = FakeDevice(FakeGeometry(), hardware_roi)
+
+    with pytest.raises(RuntimeError, match=error):
+        apply_hardware_roi(device, (100, 200, 300, 250))
+
+    assert len(hardware_roi.windows) == 1
+    assert hardware_roi.enabled == ([True] if set_window_result else [])
+
+
+def test_apply_hardware_roi_skips_device_without_geometry():
+    hardware_roi = FakeHardwareRoi()
+    device = FakeDevice(geometry=None, i_roi=hardware_roi)
+
+    assert apply_hardware_roi(device, (10, 20, 30, 40)) is None
+    assert device.get_i_roi_calls == 0
+    assert hardware_roi.windows == []
+    assert hardware_roi.enabled == []
+
+
+def test_apply_hardware_roi_skips_fully_outside_sensor():
+    hardware_roi = FakeHardwareRoi()
+    device = FakeDevice(FakeGeometry(), hardware_roi)
+
+    assert apply_hardware_roi(device, (1280, 100, 20, 20)) is None
+    assert device.get_i_roi_calls == 0
+    assert hardware_roi.windows == []
+    assert hardware_roi.enabled == []
 
 
 def test_run_metavision_event_loop_filters_roi_and_replaces_queue():
@@ -119,12 +240,6 @@ def test_run_metavision_event_loop_reports_progress_before_filters():
     )
 
     assert progress == [200]
-
-
-def test_metavision_replay_factor_converts_speed_to_time_scale():
-    assert metavision_replay_factor(4.0) == pytest.approx(0.25)
-    assert metavision_replay_factor(0.25) == pytest.approx(4.0)
-    assert metavision_replay_factor(1.0) == pytest.approx(1.0)
 
 
 def test_dynamic_replay_iterator_applies_speed_factor():

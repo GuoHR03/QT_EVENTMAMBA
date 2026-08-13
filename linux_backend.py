@@ -1,100 +1,90 @@
 import argparse
 import os
-import sys
 
 import torch
-import zmq
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
-sys.path.append(os.path.join(current_dir, "backend"))
-
+from backend.inference_server import ZmqInferenceServer
 from backend.realtime_inference import EventMambaPredictor
-from backend.protocol import make_error_response
 
 
-class InferenceServer:
-    def __init__(self, center_weights=None, ellipse_weights=None, initial_mode="center", port=5555):
-        self.port = port
-        self.center_weights = center_weights
-        self.ellipse_weights = ellipse_weights
-        self.running = True
-        self.current_mode = initial_mode
-
-        current_weights = ellipse_weights if initial_mode == "ellipse" else center_weights
+class InferenceServer(ZmqInferenceServer):
+    def __init__(
+        self,
+        center_weights=None,
+        ellipse_weights=None,
+        initial_mode="center",
+        port=5555,
+        instance_nonce=None,
+    ):
+        current_weights = (
+            ellipse_weights if initial_mode == "ellipse" else center_weights
+        )
         if not current_weights or not os.path.exists(current_weights):
-            print(f"{initial_mode} 模式权重文件不存在: {current_weights}")
-            sys.exit(1)
-
-        try:
-            self.model = EventMambaPredictor(
-                center_weights=center_weights,
-                ellipse_weights=ellipse_weights,
-                initial_mode=initial_mode,
+            raise FileNotFoundError(
+                f"{initial_mode} mode weights do not exist: {current_weights}"
             )
-        except Exception as e:
-            print(f"{initial_mode} 模型加载失败: {e}")
-            sys.exit(1)
 
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.REP)
-        self.socket.setsockopt(zmq.LINGER, 0)
-        self.socket.setsockopt(zmq.RCVHWM, 1)
-        self.socket.setsockopt(zmq.CONFLATE, 1)
-        self.socket.bind(f"tcp://0.0.0.0:{self.port}")
-
-    def run(self):
-        while self.running:
-            try:
-                data = self.socket.recv_pyobj()
-                if isinstance(data, dict) and data.get("msg_type") == "PING":
-                    self.socket.send_string("READY")
-                    continue
-                result = self.model.process_data(data)
-                self.socket.send_pyobj(result)
-            except Exception as e:
-                print(f"推理循环出错: {e}")
-                try:
-                    self.socket.send_pyobj(make_error_response(f"Error: {str(e)}"))
-                except Exception:
-                    pass
+        model = EventMambaPredictor(
+            center_weights=center_weights,
+            ellipse_weights=ellipse_weights,
+            initial_mode=initial_mode,
+        )
+        super().__init__(
+            model,
+            port,
+            "127.0.0.1",
+            error_prefix="Inference loop failed",
+            instance_nonce=instance_nonce,
+        )
 
     def stop(self):
-        self.running = False
-        self.socket.close()
-        self.context.term()
+        super().stop()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="EventMamba Linux Backend Server")
-    parser.add_argument("--weights", type=str, help="旧接口，默认按 center 模式权重处理")
-    parser.add_argument("--center-weights", type=str, help="Center 模式 .pt(.pth) 权重文件路径")
-    parser.add_argument("--ellipse-weights", type=str, help="Ellipse 模式 .pt(.pth) 权重文件路径")
-    parser.add_argument("--port", type=int, default=5555, help="ZMQ 绑定端口号")
-    args = parser.parse_args()
+def _parse_args():
+    parser = argparse.ArgumentParser(description="EventMamba Linux backend server")
+    parser.add_argument(
+        "--weights",
+        help="Legacy alias for center-mode weights",
+    )
+    parser.add_argument("--center-weights", help="Center-mode .pt/.pth weights")
+    parser.add_argument("--ellipse-weights", help="Ellipse-mode .pt/.pth weights")
+    parser.add_argument("--port", type=int, default=5555)
+    parser.add_argument("--instance-nonce")
+    return parser.parse_args()
 
+
+def main():
+    args = _parse_args()
     center_weights = args.center_weights or args.weights
     ellipse_weights = args.ellipse_weights
 
     if center_weights and ellipse_weights:
-        print("错误：请只传入一个模式对应的权重文件")
-        sys.exit(1)
+        raise SystemExit("Provide weights for only one initial prediction mode")
     if not center_weights and not ellipse_weights:
-        print("错误：必须提供 --center-weights 或 --ellipse-weights 参数")
-        sys.exit(1)
+        raise SystemExit("--center-weights or --ellipse-weights is required")
 
     initial_mode = "ellipse" if ellipse_weights else "center"
-
-    server = InferenceServer(
-        center_weights=center_weights,
-        ellipse_weights=ellipse_weights,
-        initial_mode=initial_mode,
-        port=args.port,
-    )
+    try:
+        server = InferenceServer(
+            center_weights=center_weights,
+            ellipse_weights=ellipse_weights,
+            initial_mode=initial_mode,
+            port=args.port,
+            instance_nonce=args.instance_nonce,
+        )
+    except Exception as exc:
+        raise SystemExit(f"Failed to start {initial_mode} model: {exc}") from exc
 
     try:
         server.run()
     except KeyboardInterrupt:
+        pass
+    finally:
         server.stop()
+
+
+if __name__ == "__main__":
+    main()

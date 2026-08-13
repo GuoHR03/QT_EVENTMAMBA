@@ -1,8 +1,8 @@
 import numpy as np
 
 from backend.event_processing import EVENT_CD_DTYPE
-from backend.settings import DEFAULT_FPS
-from backend.replay_clock import ReplayClock, frame_interval_us, replay_sleep_s
+from backend.h5_source import _first_existing, _h5_event_time_at
+from backend.replay_clock import ReplayClock, frame_interval_us
 
 
 def run_h5_replay_loop(
@@ -140,27 +140,5 @@ def split_events_for_frame(events, next_frame_target_time):
     return events[:split_idx], events[split_idx:], True
 
 
-def h5_frame_interval_us(fps):
-    return frame_interval_us(fps, DEFAULT_FPS)
-
-
-def h5_replay_sleep_s(next_frame_target_time, start_sensor_time, start_real_time, now):
-    return replay_sleep_s(next_frame_target_time, start_sensor_time, start_real_time, now)
-
-
 def _active_frame_interval_us(fps, fps_getter=None):
-    return h5_frame_interval_us(fps_getter() if fps_getter is not None else fps)
-
-
-def _first_existing(names, candidates):
-    for candidate in candidates:
-        if candidate in names:
-            return candidate
-    return None
-
-
-def _h5_event_time_at(events_dataset, index, time_key):
-    raw_event = events_dataset[index:index + 1]
-    if len(raw_event) == 0:
-        return None
-    return int(raw_event[time_key][0])
+    return frame_interval_us(fps_getter() if fps_getter is not None else fps)

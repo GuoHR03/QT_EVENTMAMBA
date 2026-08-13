@@ -16,7 +16,12 @@ endif()
 
 find_package(CUDAToolkit REQUIRED)
 
-add_library(eventmamba_selective_scan SHARED selective_scan_custom_op.cu)
+add_library(
+    eventmamba_selective_scan
+    SHARED
+    selective_scan_custom_op.cu
+    hierarchical_fps_custom_op.cpp
+)
 target_include_directories(eventmamba_selective_scan PRIVATE "${ONNXRUNTIME_INCLUDE_DIR}")
 target_compile_features(eventmamba_selective_scan PRIVATE cxx_std_17)
 target_link_libraries(eventmamba_selective_scan PRIVATE CUDA::cudart)
@@ -30,5 +35,11 @@ set_target_properties(eventmamba_selective_scan PROPERTIES
 if(MSVC)
     target_compile_options(eventmamba_selective_scan PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:/W4>
+        $<$<COMPILE_LANGUAGE:CXX>:/fp:precise>
+    )
+else()
+    target_compile_options(eventmamba_selective_scan PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-fast-math>
+        $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>
     )
 endif()

@@ -1,3 +1,5 @@
+import queue
+
 from backend.event_source import SourceMetadata
 from backend.playback_config import PlaybackConfig, PlaybackConfigController
 from backend.playback_coordinator import PlaybackCoordinator
@@ -6,9 +8,14 @@ from backend.playback_coordinator import PlaybackCoordinator
 class FakeRenderer:
     def __init__(self):
         self.settings = []
+        self.reset_count = 0
 
     def set_display_settings(self, palette, fps):
         self.settings.append((palette, fps))
+
+    def reset(self):
+        self.reset_count += 1
+        return True
 
 
 class FakeSource:
@@ -104,6 +111,7 @@ def test_coordinator_assembles_playback_and_reports_frames_and_progress():
     worker_calls = []
     frames = []
     progress = []
+    source_sizes = []
     worker = FakeWorker()
     recorder = FakeRecorder()
 
@@ -123,6 +131,7 @@ def test_coordinator_assembles_playback_and_reports_frames_and_progress():
         duration_hint_us=1000,
         frame_callback=lambda frame, timestamp: frames.append((frame, timestamp)),
         progress_callback=lambda current, total: progress.append((current, total)),
+        source_ready_callback=lambda width, height: source_sizes.append((width, height)),
         source_factory=source_factory,
         inference_worker_factory=worker_factory,
         noise_filter_factory=FakeNoiseFilter,
@@ -138,6 +147,7 @@ def test_coordinator_assembles_playback_and_reports_frames_and_progress():
     assert source_calls[0]["hardware_roi"] == (10, 20, 100, 80)
     assert frames == [([1, 2, 3], 550)]
     assert progress == [(200, 1000), (500, 1000)]
+    assert source_sizes == [(320, 240)]
     assert coordinator.width == 320
     assert coordinator.height == 240
     assert coordinator.source_type == "metavision"
@@ -191,11 +201,13 @@ def test_coordinator_applies_runtime_display_noise_and_roi_updates():
     assert previous == PlaybackConfig()
     assert controller.get() == updated
     assert source.renderer.settings == [("Light", 60.0)]
+    assert source.renderer.reset_count == 1
     assert coordinator.noise_filter.updates == [("trail", 2500)]
     assert coordinator.roi_tuple() == (5, 6, 70, 80)
 
     coordinator.update_config(updated.with_updates(roi=None))
     assert coordinator.noise_filter.reset_count == 1
+    assert source.renderer.reset_count == 2
 
 
 def test_coordinator_stopped_before_run_does_not_open_source():
@@ -211,3 +223,58 @@ def test_coordinator_stopped_before_run_does_not_open_source():
 
     assert source_calls == []
     assert not coordinator.is_running
+
+
+def test_roi_update_discards_stale_queues_and_rejects_old_publisher():
+    target_queue = queue.Queue(maxsize=3)
+    target_queue.put_nowait({"msg_type": "EVENTS", "timestamp": 1})
+    target_queue.put_nowait({"msg_type": "CONFIG", "width": 640})
+    coordinator = PlaybackCoordinator(
+        target_queue=target_queue,
+        noise_filter_factory=FakeNoiseFilter,
+    )
+    coordinator.inference_queue.put_nowait("old-window")
+    old_generation, _ = coordinator.roi_snapshot()
+
+    coordinator.update_config(PlaybackConfig(roi=(10, 20, 30, 40)))
+
+    assert coordinator.inference_queue.empty()
+    assert target_queue.get_nowait()["msg_type"] == "CONFIG"
+    assert target_queue.empty()
+    assert not coordinator._publish_inference_payload(
+        {"msg_type": "EVENTS"},
+        old_generation,
+    )
+    assert target_queue.empty()
+
+
+def test_analysis_gate_discards_queued_data_and_rejects_inflight_after_reenable():
+    target_queue = queue.Queue(maxsize=4)
+    target_queue.put_nowait({"msg_type": "CONFIG", "width": 640})
+    target_queue.put_nowait({"msg_type": "EVENTS", "timestamp": 1})
+    coordinator = PlaybackCoordinator(
+        target_queue=target_queue,
+        analysis_enabled=True,
+        noise_filter_factory=FakeNoiseFilter,
+    )
+    coordinator.inference_queue.put_nowait("old-window")
+    old_generation, _roi = coordinator.roi_snapshot()
+
+    assert coordinator.set_analysis_enabled(False)
+    assert coordinator.inference_queue.empty()
+    assert target_queue.get_nowait()["msg_type"] == "CONFIG"
+    assert target_queue.empty()
+
+    assert coordinator.set_analysis_enabled(True)
+    assert not coordinator._publish_inference_payload(
+        {"msg_type": "EVENTS", "timestamp": 2},
+        old_generation,
+    )
+    assert target_queue.empty()
+
+    current_generation, _roi = coordinator.roi_snapshot()
+    assert coordinator._publish_inference_payload(
+        {"msg_type": "EVENTS", "timestamp": 3},
+        current_generation,
+    )
+    assert target_queue.get_nowait()["timestamp"] == 3

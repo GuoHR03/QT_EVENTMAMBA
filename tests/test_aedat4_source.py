@@ -18,6 +18,16 @@ class FakeEventBatch:
         return self._events
 
 
+class CallbackEventBatch(FakeEventBatch):
+    def __init__(self, events, callback):
+        super().__init__(events)
+        self._callback = callback
+
+    def numpy(self):
+        self._callback()
+        return super().numpy()
+
+
 class FakeReader:
     def __init__(self, batches):
         self.batches = list(batches)
@@ -178,3 +188,93 @@ def test_aedat4_replay_skips_events_before_start_time_and_reports_progress():
 
     assert frame_generator.frames[0].tolist() == [(5, 6, 1, 50000), (7, 8, 0, 80000)]
     assert progress == [80000]
+
+
+def test_aedat4_roi_generation_change_discards_buffered_old_roi_events():
+    first = np.array(
+        [(1, 1, 1, 100)],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("polarity", "i1"), ("timestamp", "<i8")],
+    )
+    second = np.array(
+        [(21, 1, 1, 200)],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("polarity", "i1"), ("timestamp", "<i8")],
+    )
+    roi_state = {"generation": 0, "roi": (0, 0, 10, 10)}
+
+    def switch_roi():
+        roi_state.update(generation=1, roi=(20, 0, 10, 10))
+
+    renderer = FakeFrameGenerator()
+    pipeline = EventPipeline(
+        roi_getter=lambda: roi_state["roi"],
+        roi_snapshot_getter=lambda: (
+            roi_state["generation"],
+            roi_state["roi"],
+        ),
+        noise_filter=PassthroughFilter(),
+        renderer=renderer,
+    )
+
+    run_aedat4_replay_loop(
+        reader=FakeReader(
+            [
+                FakeEventBatch(first),
+                CallbackEventBatch(second, switch_roi),
+            ]
+        ),
+        event_pipeline=pipeline,
+        fps=30,
+        is_running=lambda: True,
+        sleep=lambda _seconds: None,
+        now=lambda: 0.0,
+    )
+
+    assert len(renderer.frames) == 1
+    assert renderer.frames[0].tolist() == [(21, 1, 1, 200)]
+
+
+def test_aedat4_inference_generation_change_keeps_same_roi_display_buffer():
+    first = np.array(
+        [(1, 1, 1, 100)],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("polarity", "i1"), ("timestamp", "<i8")],
+    )
+    second = np.array(
+        [(2, 2, 1, 200)],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("polarity", "i1"), ("timestamp", "<i8")],
+    )
+    snapshot = {"generation": 0, "roi": None}
+
+    def change_inference_generation():
+        snapshot["generation"] += 1
+
+    renderer = FakeFrameGenerator()
+    pipeline = EventPipeline(
+        roi_getter=lambda: snapshot["roi"],
+        roi_snapshot_getter=lambda: (
+            snapshot["generation"],
+            snapshot["roi"],
+        ),
+        noise_filter=PassthroughFilter(),
+        renderer=renderer,
+        analysis_enabled=lambda: False,
+    )
+
+    run_aedat4_replay_loop(
+        reader=FakeReader(
+            [
+                FakeEventBatch(first),
+                CallbackEventBatch(second, change_inference_generation),
+            ]
+        ),
+        event_pipeline=pipeline,
+        fps=30,
+        is_running=lambda: True,
+        sleep=lambda _seconds: None,
+        now=lambda: 0.0,
+    )
+
+    assert len(renderer.frames) == 1
+    assert renderer.frames[0].tolist() == [
+        (1, 1, 1, 100),
+        (2, 2, 1, 200),
+    ]

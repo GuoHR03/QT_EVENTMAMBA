@@ -75,4 +75,8 @@ $dll = Join-Path $resolvedBuildDir "eventmamba_selective_scan.dll"
 if (-not (Test-Path $dll)) {
     throw "Build completed but DLL was not found: $dll"
 }
-Write-Output $dll
+$runtimeBin = Join-Path $sourceDir "bin"
+New-Item -ItemType Directory -Force -Path $runtimeBin | Out-Null
+$runtimeDll = Join-Path $runtimeBin "eventmamba_selective_scan.dll"
+Copy-Item -LiteralPath $dll -Destination $runtimeDll -Force
+Write-Output $runtimeDll

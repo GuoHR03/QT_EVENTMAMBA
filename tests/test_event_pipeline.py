@@ -2,7 +2,7 @@ import queue
 
 import numpy as np
 
-from backend.event_pipeline import EventPipeline, EventWindowSlicer
+from backend.event_pipeline import EventPipeline, EventWindowSlicer, InferenceWindow
 from backend.event_processing import EVENT_CD_DTYPE
 
 
@@ -22,6 +22,19 @@ class FrameGenerator:
 
     def process_events(self, events):
         self.frames.append(events.copy())
+
+
+class TrackingSlicer:
+    def __init__(self):
+        self.consume_calls = 0
+        self.reset_calls = 0
+
+    def consume(self, _events):
+        self.consume_calls += 1
+        return []
+
+    def reset(self):
+        self.reset_calls += 1
 
 
 def test_event_window_slicer_preserves_windows_across_input_batches():
@@ -149,3 +162,124 @@ def test_event_pipeline_reads_roi_dynamically_for_display_and_inference():
 
     assert frames.frames[0].tolist() == events.tolist()
     assert frames.frames[1].tolist() == [(10, 10, 0, 100)]
+
+
+def test_roi_generation_change_resets_slicer_and_binds_window_snapshot():
+    snapshot = [0, None]
+    inference_queue = queue.Queue()
+    pipeline = EventPipeline(
+        roi_getter=lambda: snapshot[1],
+        roi_snapshot_getter=lambda: tuple(snapshot),
+        noise_filter=PassthroughFilter(),
+        renderer=None,
+        inference_queue=inference_queue,
+        inference_interval_us=20000,
+    )
+    first = np.array(
+        [(1, 1, 1, 0), (2, 2, 1, 10000)],
+        dtype=EVENT_CD_DTYPE,
+    )
+    second = np.array(
+        [(10, 10, 1, 21000), (11, 11, 1, 30000), (12, 12, 1, 41000)],
+        dtype=EVENT_CD_DTYPE,
+    )
+
+    pipeline.process_events(first, render=False)
+    snapshot[:] = [1, (9, 9, 5, 5)]
+    pipeline.process_events(second, render=False)
+
+    window = inference_queue.get_nowait()
+    assert isinstance(window, InferenceWindow)
+    assert window.roi_generation == 1
+    assert window.roi == (9, 9, 5, 5)
+    assert window.events["t"].tolist() == [21000, 30000]
+
+
+def test_disabled_inference_resets_without_consuming_or_enqueuing_events():
+    enabled = [True]
+    inference_queue = queue.Queue()
+    pipeline = EventPipeline(
+        roi_getter=lambda: None,
+        noise_filter=PassthroughFilter(),
+        renderer=None,
+        inference_queue=inference_queue,
+        inference_interval_us=20000,
+        analysis_enabled=lambda: enabled[0],
+    )
+    slicer = TrackingSlicer()
+    pipeline.inference_slicer = slicer
+    events = np.array(
+        [(1, 1, 1, 0), (2, 2, 1, 25000)],
+        dtype=EVENT_CD_DTYPE,
+    )
+
+    pipeline.process_events(events, render=False)
+    reset_calls_while_enabled = slicer.reset_calls
+    enabled[0] = False
+    pipeline.process_events(events, render=False)
+
+    assert slicer.consume_calls == 1
+    assert slicer.reset_calls == reset_calls_while_enabled + 1
+    assert inference_queue.empty()
+
+
+def test_reenabled_inference_starts_a_fresh_window_after_disabled_events():
+    enabled = [True]
+    inference_queue = queue.Queue()
+    pipeline = EventPipeline(
+        roi_getter=lambda: None,
+        noise_filter=PassthroughFilter(),
+        renderer=None,
+        inference_queue=inference_queue,
+        inference_interval_us=20000,
+        analysis_enabled=lambda: enabled[0],
+    )
+
+    pipeline.process_events(
+        np.array([(1, 1, 1, 0), (2, 2, 1, 10000)], dtype=EVENT_CD_DTYPE),
+        render=False,
+    )
+    enabled[0] = False
+    pipeline.process_events(
+        np.array([(3, 3, 1, 21000), (4, 4, 1, 41000)], dtype=EVENT_CD_DTYPE),
+        render=False,
+    )
+    assert inference_queue.empty()
+
+    enabled[0] = True
+    pipeline.process_events(
+        np.array([(5, 5, 1, 100000), (6, 6, 1, 110000)], dtype=EVENT_CD_DTYPE),
+        render=False,
+    )
+    assert inference_queue.empty()
+    pipeline.process_events(
+        np.array([(7, 7, 1, 121000)], dtype=EVENT_CD_DTYPE),
+        render=False,
+    )
+
+    assert inference_queue.get_nowait()["t"].tolist() == [100000, 110000]
+    assert inference_queue.empty()
+
+
+def test_stale_inference_generation_is_rejected_before_slicing():
+    inference_queue = queue.Queue()
+    pipeline = EventPipeline(
+        roi_getter=lambda: None,
+        noise_filter=PassthroughFilter(),
+        renderer=None,
+        inference_queue=inference_queue,
+        inference_interval_us=20000,
+        analysis_enabled=lambda: True,
+        inference_generation_is_current=lambda _generation: False,
+    )
+    slicer = TrackingSlicer()
+    pipeline.inference_slicer = slicer
+    events = np.array(
+        [(1, 1, 1, 0), (2, 2, 1, 25000)],
+        dtype=EVENT_CD_DTYPE,
+    )
+
+    pipeline.process_events(events, render=False)
+
+    assert slicer.consume_calls == 0
+    assert inference_queue.empty()

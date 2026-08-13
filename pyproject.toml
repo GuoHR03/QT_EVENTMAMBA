@@ -1,6 +1,6 @@
 [project]
 name = "ui-event"
-version = "0.1.0"
+version = "0.2.0"
 description = "PyQt6 event camera visualization and EventMamba inference UI."
 requires-python = ">=3.8"
 dependencies = [
@@ -9,12 +9,14 @@ dependencies = [
     "numpy",
     "opencv-python",
     "h5py",
+]
+
+[project.optional-dependencies]
+wsl-backend = [
     "torch",
     "timm",
     "mamba-ssm",
 ]
-
-[project.optional-dependencies]
 dev = [
     "pytest",
 ]
@@ -22,17 +24,3 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-
-[tool.pyside6-project]
-files = [
-    ".gitignore",
-    "main.py",
-    "app",
-    "backend",
-    "libs/",
-    "app/form.ui",
-    "app/widget.py",
-    "app/choose_windows.py",
-    "app/choose_form.ui",
-    "linux_backend.py",
-]

@@ -24,9 +24,50 @@ def test_normalize_noise_filter_type_accepts_aliases():
     assert normalize_noise_filter_type("unknown") == "none"
 
 
-def test_normalize_roi_clamps_to_sensor_bounds():
-    assert normalize_roi((-10, 20, 50, 100), 640, 480) == (0, 20, 40, 100)
-    assert normalize_roi((10, 10, 0, 100), 640, 480) is None
+@pytest.mark.parametrize(
+    ("roi", "expected"),
+    [
+        ((-10, 20, 50, 100), (0, 20, 40, 100)),
+        ((620, 20, 50, 100), (620, 20, 20, 100)),
+        ((10, -20, 50, 100), (10, 0, 50, 80)),
+        ((10, 450, 50, 100), (10, 450, 50, 30)),
+    ],
+)
+def test_normalize_roi_intersects_partially_overlapping_sensor_edges(roi, expected):
+    assert normalize_roi(roi, 640, 480) == expected
+
+
+@pytest.mark.parametrize(
+    "roi",
+    [
+        (-20, 10, 5, 5),
+        (640, 10, 5, 5),
+        (10, -20, 5, 5),
+        (10, 480, 5, 5),
+    ],
+)
+def test_normalize_roi_rejects_rectangles_fully_outside_each_sensor_edge(roi):
+    assert normalize_roi(roi, 640, 480) is None
+
+
+@pytest.mark.parametrize(
+    ("roi", "sensor_size"),
+    [
+        ((10, 10, 10, 10), (0, 480)),
+        ((10, 10, 10, 10), (640, 0)),
+        ((10, 10, 10, 10), (-1, 480)),
+        ((10, 10, 10, 10), (640, -1)),
+        ((10, 10, 0, 10), (640, 480)),
+        ((10, 10, 10, 0), (640, 480)),
+        ((10, 10, -1, 10), (640, 480)),
+        ((10, 10, 10, -1), (640, 480)),
+    ],
+)
+def test_normalize_roi_rejects_non_positive_sensor_or_roi_dimensions(roi, sensor_size):
+    assert normalize_roi(roi, *sensor_size) is None
+
+
+def test_normalize_roi_rejects_missing_roi():
     assert normalize_roi(None, 640, 480) is None
 
 

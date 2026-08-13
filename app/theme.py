@@ -42,9 +42,14 @@ QWidget#control_panel_widget {
     background: transparent;
 }
 
-QScrollArea#control_panel_scroll_area,
+QScrollArea#control_panel_scroll_area {
+    background: #ffffff;
+    border: 1px solid #d7dce3;
+    border-radius: 7px;
+}
+
 QScrollArea#control_panel_scroll_area > QWidget > QWidget {
-    background: transparent;
+    background: #ffffff;
     border: none;
 }
 
@@ -126,6 +131,22 @@ QGroupBox[uiRole="accordionContent"] {
     margin-top: 0;
 }
 
+QGroupBox[uiRole="controlSubsection"] {
+    background: #f8fafc;
+    border: 1px solid #dce3ec;
+    border-radius: 6px;
+    margin-top: 18px;
+}
+
+QGroupBox[uiRole="controlSubsection"]::title {
+    subcontrol-origin: margin;
+    left: 9px;
+    padding: 0 5px;
+    color: #526174;
+    font-size: 12px;
+    font-weight: 600;
+}
+
 QLabel#viewer_title_label,
 QLabel#log_title_label {
     background: transparent;
@@ -194,6 +215,22 @@ QLabel#input_file_label {
     padding: 0 10px;
 }
 
+QLabel#runtime_name_label {
+    background: transparent;
+    border: none;
+    color: #526174;
+    font-size: 12px;
+    padding: 2px 0;
+}
+
+QPushButton#live_camera_button[sourceSelected="true"],
+QPushButton#select_input_file_button[sourceSelected="true"] {
+    background: #eaf2ff;
+    border-color: #7da9e8;
+    color: #1d5ca8;
+    font-weight: 600;
+}
+
 QTextEdit#log_text_edit {
     background: #0f172a;
     border: 1px solid #1e293b;
@@ -225,6 +262,28 @@ QPushButton:disabled {
     background: #e8edf3;
     color: #94a3b8;
     border-color: #d7dee8;
+}
+
+QPushButton#settings_panel_button {
+    background: #4383ce;
+    border: 1px solid #4383ce;
+    border-radius: 7px;
+    padding: 0;
+    min-width: 40px;
+    max-width: 42px;
+    min-height: 40px;
+    max-height: 42px;
+}
+
+QPushButton#settings_panel_button:hover {
+    background: #3474bf;
+    border-color: #3474bf;
+}
+
+QPushButton#settings_panel_button:pressed,
+QPushButton#settings_panel_button:checked {
+    background: #245ea8;
+    border-color: #245ea8;
 }
 
 QPushButton#start_camera_button,
@@ -355,67 +414,6 @@ QSlider#playback_progress_slider::handle:horizontal {
 
 QSlider#playback_progress_slider:disabled::sub-page:horizontal {
     background: #94a3b8;
-}
-
-QWidget#ChooseWindowForm QGroupBox {
-    background: #ffffff;
-}
-
-QGroupBox[uiRole="accordionContent"] QWidget#ChooseWindowForm {
-    background: #ffffff;
-}
-
-QWidget#ChooseWindowForm QFrame#mode_card_frame,
-QWidget#ChooseWindowForm QFrame#roi_card_frame,
-QWidget#ChooseWindowForm QFrame#noise_filter_widget {
-    background: #ffffff;
-    border: 1px solid #d9e0ea;
-    border-radius: 8px;
-}
-
-QWidget#ChooseWindowForm QLabel#mode_title_label,
-QWidget#ChooseWindowForm QLabel#roi_title_label,
-QWidget#ChooseWindowForm QLabel#denoise_title_label {
-    background: transparent;
-    border: none;
-    color: #1f2a44;
-    font-size: 15px;
-    font-weight: 600;
-    padding-left: 4px;
-    min-height: 24px;
-}
-
-QWidget#ChooseWindowForm QLabel {
-    background: transparent;
-    border: none;
-}
-
-QWidget#ChooseWindowForm QRadioButton {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    padding: 5px 10px;
-}
-
-QWidget#ChooseWindowForm QRadioButton:checked {
-    background: #eff6ff;
-    border-color: #93c5fd;
-    color: #1d4ed8;
-    font-weight: 600;
-}
-
-QWidget#ChooseWindowForm QComboBox#noise_filter_combo_box,
-QWidget#ChooseWindowForm QSpinBox#noise_threshold_spin_box {
-    background: #ffffff;
-    border: 1px solid #cfd8e3;
-    border-radius: 6px;
-    padding: 4px 10px;
-    min-height: 28px;
-}
-
-QWidget#ChooseWindowForm QComboBox#noise_filter_combo_box::drop-down {
-    border-left: none;
-    width: 30px;
 }
 
 """
