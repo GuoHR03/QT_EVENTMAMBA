@@ -31,7 +31,7 @@ ZeroMQ 协议和 native-FPS 打包改动，详见 [CHANGELOG.md](CHANGELOG.md) �
 - `.qtcreator/Pythonvenv/Scripts/python.exe`（Python 3.8 x64），已安装 UI 运行依赖和 PyInstaller；正式包中的 Metavision 原生扩展固定为 CPython 3.8 ABI。
 - `.venv-onnx-win/Scripts/python.exe`（当前验证为 Python 3.13），已安装 ONNX/CUDA 后端依赖和 PyInstaller。
 - Inno Setup 6；如果 `ISCC.exe` 不在常见安装目录或 `PATH` 中，可设置 `ISCC` 环境变量。
-- 完整的 Metavision SDK Runtime。构建脚本优先读取 `METAVISION_SDK_PATH`，未设置时使用 `E:\Metavision\Prophesee`。
+- 项目 `libs/` 中的 Metavision Runtime。构建脚本优先读取 `METAVISION_SDK_PATH`，未设置时优先使用项目内运行库；运行库不完整时才回退到 `E:\Metavision\Prophesee`。
 - 下列正式推理文件：
 
 ```text
@@ -95,7 +95,7 @@ lib/hdf5/plugin/
 lib/metavision/hal/plugins/
 ```
 
-如 SDK 位于其他目录，先设置：
+如需改用其他目录中的 SDK Runtime，先设置：
 
 ```powershell
 $env:METAVISION_SDK_PATH = "D:\Path\To\Prophesee"

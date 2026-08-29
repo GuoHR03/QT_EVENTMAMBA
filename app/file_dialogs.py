@@ -6,11 +6,13 @@ from .paths import default_checkpoint_dir, default_onnx_model_dir, default_recor
 def choose_input_file(parent):
     file_path, _ = QFileDialog.getOpenFileName(
         parent,
-        "选择 RAW 事件文件",
+        "选择事件文件",
         default_record_dir(),
         (
+            "事件文件 (*.raw *.hdf5 *.h5 *.aedat4);;"
             "RAW 事件文件 (*.raw);;"
-            "兼容事件文件 (*.hdf5 *.h5 *.aedat4);;"
+            "H5/HDF5 事件文件 (*.hdf5 *.h5);;"
+            "AEDAT4 事件文件 (*.aedat4);;"
             "所有文件 (*)"
         ),
     )

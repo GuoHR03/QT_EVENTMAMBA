@@ -96,6 +96,44 @@ def test_configure_runtime_registers_bundled_and_installed_libraries(tmp_path, m
     ]
 
 
+def test_configure_runtime_uses_source_tree_libs_as_sdk_runtime(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    app_dir = project_dir / "app"
+    module_file = app_dir / "widget.py"
+    libs_dir = project_dir / "libs"
+    sdk_directories = (
+        libs_dir / "bin",
+        libs_dir / "third_party" / "bin",
+        libs_dir / "lib" / "hdf5" / "plugin",
+        libs_dir / "lib" / "metavision" / "hal" / "plugins",
+    )
+    for directory in sdk_directories:
+        directory.mkdir(parents=True)
+
+    registered_dll_dirs = []
+    monkeypatch.setattr(sys, "path", [])
+    monkeypatch.setattr(
+        bootstrap.os,
+        "add_dll_directory",
+        lambda path: registered_dll_dirs.append(path) or object(),
+        raising=False,
+    )
+    monkeypatch.delenv("METAVISION_SDK_PATH", raising=False)
+    monkeypatch.delenv("HDF5_PLUGIN_PATH", raising=False)
+    monkeypatch.delenv("MV_HAL_PLUGIN_PATH", raising=False)
+
+    assert bootstrap.configure_runtime(str(module_file)) == (
+        str(app_dir),
+        str(project_dir),
+    )
+
+    assert str(libs_dir) in sys.path
+    assert str(libs_dir / "bin") in sys.path
+    assert registered_dll_dirs == [str(libs_dir), *map(str, sdk_directories)]
+    assert os.environ["HDF5_PLUGIN_PATH"] == str(sdk_directories[2])
+    assert os.environ["MV_HAL_PLUGIN_PATH"] == str(sdk_directories[3])
+
+
 def test_app_resource_path_prefers_bundled_app_resource(tmp_path, monkeypatch):
     bundle_dir = tmp_path / "bundle"
     install_dir = tmp_path / "UI_Event"

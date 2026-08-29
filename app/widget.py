@@ -262,7 +262,7 @@ class MainWindow(QWidget):
         self.unload_model_button.setText("停止推理")
         self.restart_model_button.setText("重启推理")
         self.live_camera_button.setText("实时相机")
-        self.select_input_file_button.setText("选择 RAW 文件")
+        self.select_input_file_button.setText("选择事件文件")
         self.weight_path_label.setText("尚未选择权重")
         self.input_file_label.setText("实时相机")
 
@@ -270,7 +270,7 @@ class MainWindow(QWidget):
         self.replay_speed_combo_box.setToolTip("调整离线文件的回放速度")
         self.live_camera_button.setToolTip("切换到已连接的实时事件相机")
         self.select_input_file_button.setToolTip(
-            "选择 RAW 事件文件；H5 和 AEDAT4 作为兼容格式保留"
+            "选择 RAW、H5/HDF5 或 AEDAT4 事件文件"
         )
         self.fps_spin_box.setToolTip(
             "控制画面帧率和每帧事件累计时间，不影响模型的 20 ms 推理窗口"

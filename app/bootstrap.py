@@ -57,11 +57,19 @@ def configure_runtime(module_file):
         if path not in sys.path:
             sys.path.insert(0, path)
 
-    bundled_sdk_roots = [
-        os.path.join(root, "metavision")
-        for root in (install_root, resource_root)
-        if os.path.isdir(os.path.join(root, "metavision"))
-    ]
+    bundled_sdk_roots = []
+    for root in (install_root, resource_root):
+        for directory_name in ("metavision", "libs"):
+            candidate = os.path.join(root, directory_name)
+            if all(
+                os.path.isdir(os.path.join(candidate, relative))
+                for relative in (
+                    os.path.join("third_party", "bin"),
+                    os.path.join("lib", "hdf5", "plugin"),
+                    os.path.join("lib", "metavision", "hal", "plugins"),
+                )
+            ):
+                bundled_sdk_roots.append(candidate)
     sdk_root = os.environ.get("METAVISION_SDK_PATH")
     if not sdk_root:
         sdk_root = (

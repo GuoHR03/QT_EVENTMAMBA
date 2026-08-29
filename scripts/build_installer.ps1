@@ -24,8 +24,15 @@ $ArtifactSourceDir = Join-Path $ProjectRoot "artifacts"
 $NativeDllSource = Join-Path $ProjectRoot "native\selective_scan_ort\bin\eventmamba_selective_scan.dll"
 $ArtifactValidator = Join-Path $ProjectRoot "tools\validate_windows_inference_artifacts.py"
 $NativeFpsProbe = Join-Path $ProjectRoot "tools\onnx_hierarchical_fps_custom_op_probe.py"
+$ProjectMetavisionRuntime = Join-Path $ProjectRoot "libs"
 $MetavisionSdkRoot = if ($env:METAVISION_SDK_PATH) {
     [Environment]::ExpandEnvironmentVariables($env:METAVISION_SDK_PATH.Trim().Trim('"'))
+} elseif (
+    (Test-Path -LiteralPath (Join-Path $ProjectMetavisionRuntime "third_party\bin") -PathType Container) -and
+    (Test-Path -LiteralPath (Join-Path $ProjectMetavisionRuntime "lib\hdf5\plugin") -PathType Container) -and
+    (Test-Path -LiteralPath (Join-Path $ProjectMetavisionRuntime "lib\metavision\hal\plugins") -PathType Container)
+) {
+    $ProjectMetavisionRuntime
 } else {
     "E:\Metavision\Prophesee"
 }
