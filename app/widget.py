@@ -33,13 +33,21 @@ from .bootstrap import app_resource_path
 from .choose_windows import ChooseWindow
 from .controller import AppController
 from .file_dialogs import choose_input_file, choose_weights_file
-from .inference_operation import InferenceOperationThread
+from .inference_operation_coordinator import InferenceOperationCoordinator
+from .inference_operation_state import (
+    INFERENCE_CLOSE,
+    INFERENCE_RESTART,
+    INFERENCE_START,
+    INFERENCE_STOP,
+    InferenceOperationState,
+)
 from .log_formatter import (
     backend_message,
     mode_display_name,
     noise_settings_message,
     roi_settings_message,
 )
+from .playback_progress import PLAYBACK_SLIDER_MAX, PlaybackProgressState
 from .prediction_overlay import draw_prediction
 from .prediction_state import PredictionState
 from .settings import AppSettings
@@ -56,12 +64,6 @@ REPLAY_SPEEDS = {
     "2x": 2.0,
     "4x": 4.0,
 }
-PLAYBACK_SLIDER_MAX = 10000
-INFERENCE_START = "start"
-INFERENCE_STOP = "stop"
-INFERENCE_RESTART = "restart"
-INFERENCE_CLEANUP = "cleanup"
-INFERENCE_CLOSE = "close"
 
 
 class MainWindow(QWidget):
@@ -77,19 +79,18 @@ class MainWindow(QWidget):
         self._configure_inference_runtime_ui()
         self.view_state = MainViewState(self)
         self.predictions = PredictionState(interval_ms=20)
-        self._is_dragging_progress = False
-        self._progress_total_us = 0
+        self.playback_progress = PlaybackProgressState()
         self._last_frame_size = None
-        self._inference_operation = None
-        self._close_pending = False
-        self._close_ready = False
-        self._cleanup_after_operation = False
-        self._last_inference_state = None
+        self.inference_operations = InferenceOperationState()
 
         self._connect_signals()
         self._init_view_state()
         self._inference_health_timer = QTimer(self)
         self._inference_health_timer.setInterval(1000)
+        self.inference_operation_coordinator = InferenceOperationCoordinator(
+            self,
+            state=self.inference_operations,
+        )
         self._inference_health_timer.timeout.connect(self._refresh_inference_state)
         self._inference_health_timer.start()
 
@@ -370,11 +371,14 @@ class MainWindow(QWidget):
         inference_layout.addWidget(self.runtime_name_label)
         inference_layout.addWidget(self.weight_path_label)
         inference_layout.addWidget(self.select_weight_button)
-        model_buttons = QHBoxLayout()
-        model_buttons.setSpacing(8)
-        model_buttons.addWidget(self.load_model_button)
-        model_buttons.addWidget(self.unload_model_button)
-        model_buttons.addWidget(self.restart_model_button)
+        model_buttons = QGridLayout()
+        model_buttons.setHorizontalSpacing(8)
+        model_buttons.setVerticalSpacing(8)
+        model_buttons.addWidget(self.load_model_button, 0, 0, 1, 2)
+        model_buttons.addWidget(self.unload_model_button, 1, 0)
+        model_buttons.addWidget(self.restart_model_button, 1, 1)
+        model_buttons.setColumnStretch(0, 1)
+        model_buttons.setColumnStretch(1, 1)
         inference_layout.addLayout(model_buttons)
         self.prediction_mode_group_box = QGroupBox(self.control_panel_widget)
         mode_layout = QHBoxLayout(self.prediction_mode_group_box)
@@ -434,24 +438,35 @@ class MainWindow(QWidget):
         roi_layout.addWidget(self.roi_settings_editor.select_roi_button, 5, 0, 1, 2)
         roi_layout.setColumnStretch(1, 1)
 
-        self.playback_display_roi_group_box = QGroupBox(self.control_panel_widget)
-        view_controls_layout = QVBoxLayout(self.playback_display_roi_group_box)
-        view_controls_layout.setContentsMargins(10, 8, 10, 10)
-        view_controls_layout.setSpacing(8)
+        self.input_playback_group_box = QGroupBox(self.control_panel_widget)
+        input_playback_layout = QVBoxLayout(self.input_playback_group_box)
+        input_playback_layout.setContentsMargins(10, 8, 10, 10)
+        input_playback_layout.setSpacing(8)
         for group_box, title in (
+            (self.source_group_box, "数据源"),
             (self.playback_group_box, "采集与回放"),
+        ):
+            group_box.setTitle(title)
+            group_box.setProperty("uiRole", "controlSubsection")
+            input_playback_layout.addWidget(group_box)
+
+        self.display_roi_group_box = QGroupBox(self.control_panel_widget)
+        display_roi_layout = QVBoxLayout(self.display_roi_group_box)
+        display_roi_layout.setContentsMargins(10, 8, 10, 10)
+        display_roi_layout.setSpacing(8)
+        for group_box, title in (
             (self.display_group_box, "显示设置"),
             (self.roi_group_box, "ROI 区域"),
         ):
             group_box.setTitle(title)
             group_box.setProperty("uiRole", "controlSubsection")
-            view_controls_layout.addWidget(group_box)
+            display_roi_layout.addWidget(group_box)
 
     def _init_control_panel_accordion(self):
         """Turn the existing control groups into a compact accordion."""
         sections = (
-            (self.source_group_box, "数据源"),
-            (self.playback_display_roi_group_box, "采集、显示与 ROI"),
+            (self.input_playback_group_box, "输入与播放"),
+            (self.display_roi_group_box, "显示与 ROI"),
             (self.recording_group_box, "数据录制"),
             (self.model_prediction_group_box, "模型与预测"),
             (self.processing_group_box, "去噪"),
@@ -489,7 +504,7 @@ class MainWindow(QWidget):
             self.control_panel_layout.insertWidget(spacer_index + offset, section)
 
         self.control_panel_layout.setSpacing(0)
-        self._set_accordion_section(self.source_group_box, True)
+        self._set_accordion_section(self.input_playback_group_box, True)
 
     def _set_accordion_section(self, target, expanded):
         for header, content in self._control_accordion_sections:
@@ -533,7 +548,7 @@ class MainWindow(QWidget):
                 break
         self.record_button.setVisible(not file_mode)
         if file_mode and recording_header is not None and recording_header.isChecked():
-            self._set_accordion_section(self.source_group_box, True)
+            self._set_accordion_section(self.input_playback_group_box, True)
 
         for button, selected in (
             (self.live_camera_button, not file_mode),
@@ -860,23 +875,23 @@ class MainWindow(QWidget):
         self.predictions.add_result(result, pred_timestamp, self.settings.prediction_mode)
 
     def closeEvent(self, event):
-        if self._close_ready:
+        if self.inference_operations.close_ready:
             event.accept()
             return
 
         event.ignore()
-        if not self._close_pending:
-            self._close_pending = True
+        if self.inference_operations.begin_close():
             self.setEnabled(False)
             self._inference_health_timer.stop()
 
         if self._inference_operation_is_running():
-            if self._inference_operation.operation_name == INFERENCE_CLOSE:
+            worker = self.inference_operations.worker
+            if self.inference_operations.operation_name == INFERENCE_CLOSE:
                 # Do not cancel the cleanup worker itself. If it were
                 # interrupted before calling stop_backend(), accepting this
                 # close would leave the inference process orphaned.
                 return
-            self._inference_operation.requestInterruption()
+            worker.requestInterruption()
             try:
                 self.controller.cancel_model_start()
             except Exception as exc:
@@ -893,7 +908,7 @@ class MainWindow(QWidget):
             self.controller.close_ui_resources()
         except Exception as exc:
             self.append_log(f"关闭 Qt 运行资源失败：{exc}", "error")
-            self._close_pending = False
+            self.inference_operations.abort_close()
             self.setEnabled(True)
             self._inference_health_timer.start()
             self.view_state.set_model_error()
@@ -908,15 +923,15 @@ class MainWindow(QWidget):
         if not started:
             # Starting the cleanup worker can itself fail. Keep the window
             # alive so the retained process/thread handles can be retried.
-            if self._close_pending:
+            if self.inference_operations.close_pending:
                 self.append_log("无法启动关闭清理任务，窗口保持打开", "error")
-                self._close_pending = False
+                self.inference_operations.abort_close()
                 self.setEnabled(True)
                 self._inference_health_timer.start()
                 self.view_state.set_model_error()
 
     def _complete_close(self):
-        self._close_ready = True
+        self.inference_operations.complete_close()
         QTimer.singleShot(0, self.close)
 
     def update_replay_speed(self):
@@ -934,27 +949,8 @@ class MainWindow(QWidget):
         if not source_is_file(self.controller):
             self._reset_playback_progress()
             return
-
-        total_us = max(0, int(total_us or 0))
-        current_us = max(0, int(current_us or 0))
-        if total_us > 0:
-            current_us = min(total_us, current_us)
-        self._progress_total_us = total_us
-        self.playback_progress_slider.setEnabled(total_us > 0)
-
-        if not self._is_dragging_progress:
-            value = 0
-            if total_us > 0:
-                value = int((current_us / total_us) * PLAYBACK_SLIDER_MAX)
-            self.playback_progress_slider.blockSignals(True)
-            self.playback_progress_slider.setValue(value)
-            self.playback_progress_slider.blockSignals(False)
-
-        if total_us > 0:
-            total_label = _format_playback_time_us(total_us)
-        else:
-            total_label = "--:--"
-        self.playback_time_label.setText(f"{_format_playback_time_us(current_us)} / {total_label}")
+        view = self.playback_progress.update(current_us, total_us)
+        self._apply_playback_progress_view(view)
 
     def stop_camera(self):
         self.controller.stop_camera()
@@ -1015,7 +1011,7 @@ class MainWindow(QWidget):
         self.controller.set_weights_path(weights_path)
 
     def load_eventmamba(self):
-        if self._close_pending:
+        if self.inference_operations.close_pending:
             return
         if self._inference_operation_is_running():
             self.append_log("已有推理服务操作正在进行，请稍候", "warning")
@@ -1035,7 +1031,7 @@ class MainWindow(QWidget):
         self._start_inference_operation(INFERENCE_START, self.controller.load_model)
 
     def unload_eventmamba(self):
-        if self._close_pending:
+        if self.inference_operations.close_pending:
             return
         if self._inference_operation_is_running():
             self.append_log("已有推理服务操作正在进行，请稍候", "warning")
@@ -1048,7 +1044,7 @@ class MainWindow(QWidget):
         self._start_inference_operation(INFERENCE_STOP, self.controller.unload_model)
 
     def restart_eventmamba(self):
-        if self._close_pending:
+        if self.inference_operations.close_pending:
             return
         if self._inference_operation_is_running():
             self.append_log("已有推理服务操作正在进行，请稍候", "warning")
@@ -1064,15 +1060,9 @@ class MainWindow(QWidget):
         self._start_inference_operation(INFERENCE_RESTART, self.controller.restart_model)
 
     def _stop_model_network_before_backend(self, action):
-        """Destroy NetworkThread on the UI thread before a backend worker."""
-        try:
-            self.controller.stop_model_network()
-        except Exception as exc:
-            self.view_state.set_model_error()
-            self.append_log(f"{action}推理前停止网络线程失败：{exc}", "error")
-            self._last_inference_state = self.controller.inference_state
-            return False
-        return True
+        return self.inference_operation_coordinator.stop_network_before_backend(
+            action
+        )
 
     def _start_inference_operation(
         self,
@@ -1080,181 +1070,25 @@ class MainWindow(QWidget):
         operation,
         allow_when_closing=False,
     ):
-        if self._close_pending and not allow_when_closing:
-            return False
-        if self._inference_operation_is_running():
-            self.append_log("已有推理服务操作正在进行，请稍候", "warning")
-            return False
-
-        worker = InferenceOperationThread(operation_name, operation, self)
-        worker.succeeded.connect(self._handle_inference_operation_success)
-        worker.failed.connect(self._handle_inference_operation_failure)
-        worker.cancelled.connect(self._handle_inference_operation_cancelled)
-        worker.finished.connect(self._finish_inference_operation)
-        self._inference_operation = worker
-        self._set_prediction_mode_controls_enabled(False)
-        try:
-            worker.start()
-        except Exception as exc:
-            self._inference_operation = None
-            worker.deleteLater()
-            self._set_prediction_mode_controls_enabled(True)
-            self._handle_inference_operation_failure(operation_name, str(exc))
-            return False
-        return True
-
-    def _handle_inference_operation_success(self, operation_name):
-        if self._close_pending or operation_name == INFERENCE_CLOSE:
-            return
-
-        runtime_name = self.controller.inference_runtime_display_name
-        if operation_name == INFERENCE_STOP:
-            self.view_state.set_model_stopped()
-            self.predictions.clear()
-            self.append_log(f"{runtime_name} 推理服务已停止", "info")
-        elif operation_name == INFERENCE_CLEANUP:
-            self.view_state.set_model_stopped()
-            self.predictions.clear()
-            self.append_log("失败操作残留的推理后端已清理", "info")
-        elif operation_name in (INFERENCE_START, INFERENCE_RESTART):
-            try:
-                self.controller.start_model_network()
-            except Exception as exc:
-                self._handle_network_start_failure(operation_name, exc)
-                return
-            if self.controller.active_model_path:
-                self.view_state.set_weight_file(self.controller.active_model_path)
-            self.view_state.set_model_running()
-            action = "启动" if operation_name == INFERENCE_START else "重启"
-            self.append_log(f"{runtime_name} 推理服务已{action}", "success")
-        self._last_inference_state = self.controller.inference_state
-
-    def _handle_network_start_failure(self, operation_name, error):
-        cleanup_details = ""
-        try:
-            self.controller.stop_model_network()
-        except Exception as cleanup_error:
-            cleanup_details = f"；网络线程清理失败：{cleanup_error}"
-
-        self._cleanup_after_operation = True
-        self.view_state.set_model_error()
-        action = "启动" if operation_name == INFERENCE_START else "重启"
-        self.append_log(
-            f"{action}推理网络失败：{error}{cleanup_details}；正在清理后端",
-            "error",
+        return self.inference_operation_coordinator.start(
+            operation_name,
+            operation,
+            allow_when_closing=allow_when_closing,
         )
-        self._last_inference_state = self.controller.inference_state
-
-    def _handle_inference_operation_failure(self, operation_name, message):
-        action = {
-            INFERENCE_START: "启动推理",
-            INFERENCE_STOP: "停止推理",
-            INFERENCE_RESTART: "重启推理",
-            INFERENCE_CLEANUP: "清理推理后端",
-            INFERENCE_CLOSE: "关闭推理后端",
-        }.get(operation_name, "推理操作")
-        self.append_log(f"{action}失败：{message}", "error")
-
-        if operation_name == INFERENCE_CLOSE:
-            self._close_pending = False
-            self.setEnabled(True)
-            self._inference_health_timer.start()
-            self.view_state.set_model_error()
-            self._last_inference_state = self.controller.inference_state
-            return
-        if self._close_pending:
-            return
-        self.view_state.set_model_error()
-        self._last_inference_state = self.controller.inference_state
-
-    def _handle_inference_operation_cancelled(self, operation_name):
-        if operation_name == INFERENCE_CLOSE:
-            self._close_pending = False
-            self.setEnabled(True)
-            self._inference_health_timer.start()
-            self.view_state.set_model_error()
-            self.append_log("关闭清理被取消，窗口保持打开", "warning")
-            self._last_inference_state = self.controller.inference_state
-            return
-        if self._close_pending:
-            return
-        self.view_state.set_model_error()
-        self.append_log(f"推理操作已取消：{operation_name}", "warning")
-        self._last_inference_state = self.controller.inference_state
-
-    def _finish_inference_operation(self):
-        worker = self._inference_operation
-        operation_name = None
-        if worker is not None:
-            operation_name = worker.operation_name
-            worker.deleteLater()
-        self._inference_operation = None
-
-        if self._close_pending:
-            self._cleanup_after_operation = False
-            if operation_name == INFERENCE_CLOSE:
-                self._complete_close()
-            else:
-                QTimer.singleShot(0, self._begin_close_cleanup)
-            return
-
-        if self._cleanup_after_operation:
-            self._cleanup_after_operation = False
-            self.view_state.set_model_stopping()
-            QTimer.singleShot(0, self._start_backend_cleanup)
-            return
-
-        self._set_prediction_mode_controls_enabled(True)
-
-    def _start_backend_cleanup(self):
-        if self._close_pending:
-            self._begin_close_cleanup()
-            return
-        started = self._start_inference_operation(
-            INFERENCE_CLEANUP,
-            self.controller.unload_model,
-        )
-        if not started:
-            self._set_prediction_mode_controls_enabled(True)
-            self.view_state.set_model_error()
-            self.append_log("无法启动推理后端清理任务", "error")
 
     def _inference_operation_is_running(self):
         # Keep the UI operation busy until its queued success/failure and
         # finished signals have all been handled on the main thread. A worker
         # can already report isRunning() == False while those signals are
         # still pending.
-        return self._inference_operation is not None
+        return self.inference_operation_coordinator.busy
 
     def _set_prediction_mode_controls_enabled(self, enabled):
         self.roi_settings_editor.center_radioButton.setEnabled(enabled)
         self.roi_settings_editor.eli_radioButton.setEnabled(enabled)
 
     def _refresh_inference_state(self):
-        if self._close_pending or self._inference_operation_is_running():
-            return
-        if self.controller.inference_state == "running":
-            self.controller.is_inference_running()
-        state = self.controller.inference_state
-        if state == self._last_inference_state:
-            return
-        self._last_inference_state = state
-
-        if state == "running":
-            self.view_state.set_model_running()
-        elif state == "starting":
-            self.view_state.set_model_starting()
-        elif state == "stopping":
-            self.view_state.set_model_stopping()
-        elif state == "error":
-            self.view_state.set_model_error()
-            if self.controller.inference_last_error:
-                self.append_log(
-                    f"推理服务异常：{self.controller.inference_last_error}",
-                    "error",
-                )
-        else:
-            self.view_state.set_model_stopped()
+        return self.inference_operation_coordinator.refresh_runtime_state()
 
     def on_settings_confirmed(self, roi, mode, filter_type, threshold_us):
         if roi is not None and self._last_frame_size is not None:
@@ -1308,52 +1142,31 @@ class MainWindow(QWidget):
         return REPLAY_SPEEDS.get(self.replay_speed_combo_box.currentText(), 1.0)
 
     def _begin_progress_drag(self):
-        if self._progress_total_us <= 0:
-            return
-        self._is_dragging_progress = True
+        self.playback_progress.begin_drag()
 
     def _preview_progress_drag(self, value):
-        if self._progress_total_us <= 0:
-            return
-        value = max(0, min(PLAYBACK_SLIDER_MAX, int(value)))
-        current_us = int((value / PLAYBACK_SLIDER_MAX) * self._progress_total_us)
-        self.playback_time_label.setText(
-            f"{_format_playback_time_us(current_us)} / {_format_playback_time_us(self._progress_total_us)}"
-        )
+        view = self.playback_progress.preview(value)
+        if view is not None:
+            self._apply_playback_progress_view(view)
 
     def _finish_progress_drag(self):
-        if self._progress_total_us <= 0:
-            self._is_dragging_progress = False
+        seek = self.playback_progress.finish_drag(
+            self.playback_progress_slider.sliderPosition()
+        )
+        if seek is None:
             return
-
-        target_value = self.playback_progress_slider.sliderPosition()
-        target_value = max(0, min(PLAYBACK_SLIDER_MAX, int(target_value)))
-
-        self._is_dragging_progress = False
-        self.playback_progress_slider.blockSignals(True)
-        self.playback_progress_slider.setValue(target_value)
-        self.playback_progress_slider.blockSignals(False)
-        seek_fraction = target_value / PLAYBACK_SLIDER_MAX
+        self._apply_playback_progress_view(seek.view)
         self._sync_capture_settings_from_ui()
         self.predictions.clear()
-        self.controller.seek_playback(seek_fraction)
+        self.controller.seek_playback(seek.fraction)
 
     def _reset_playback_progress(self):
-        self._progress_total_us = 0
-        self._is_dragging_progress = False
-        self.playback_progress_slider.blockSignals(True)
-        self.playback_progress_slider.setValue(0)
-        self.playback_progress_slider.blockSignals(False)
-        self.playback_progress_slider.setEnabled(False)
-        self.playback_time_label.setText("--:-- / --:--")
+        self._apply_playback_progress_view(self.playback_progress.reset())
 
-
-def _format_playback_time_us(timestamp_us):
-    timestamp_us = max(0, int(timestamp_us or 0))
-    seconds = timestamp_us / 1_000_000.0
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    second_value = seconds % 60
-    if hours:
-        return f"{hours:d}:{minutes:02d}:{second_value:06.3f}"
-    return f"{minutes:02d}:{second_value:06.3f}"
+    def _apply_playback_progress_view(self, view):
+        self.playback_progress_slider.setEnabled(view.enabled)
+        if view.update_slider:
+            self.playback_progress_slider.blockSignals(True)
+            self.playback_progress_slider.setValue(view.slider_value)
+            self.playback_progress_slider.blockSignals(False)
+        self.playback_time_label.setText(view.label)

@@ -1,9 +1,11 @@
 class AppController:
-    def __init__(self, settings):
-        from backend.api import BackendAPI
-
+    def __init__(self, settings, backend=None):
         self.settings = settings
-        self.backend = BackendAPI()
+        if backend is None:
+            from backend.api import BackendAPI
+
+            backend = BackendAPI()
+        self.backend = backend
         self.input_file_path = None
         self.weights_path = None
 

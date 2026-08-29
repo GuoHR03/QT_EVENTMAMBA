@@ -1,4 +1,9 @@
-# Version History
+# Development Snapshot History
+
+本文件记录项目早期内部开发快照，`v1`–`v10` 不是正式产品版本号，也不代表
+当前发布状态。正式版本使用 `0.x.y` 语义版本并记录在 [CHANGELOG.md](CHANGELOG.md)。
+
+各节中的测试数量是对应快照当时的结果；当前主分支验证结果为 `384 passed`。
 
 ## v10
 

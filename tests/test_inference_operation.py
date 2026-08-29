@@ -1,4 +1,9 @@
 from app.inference_operation import InferenceOperationThread
+from app.inference_operation_state import (
+    INFERENCE_CLOSE,
+    InferenceOperationState,
+    inference_operation_action,
+)
 
 
 class ControllableOperationThread(InferenceOperationThread):
@@ -13,6 +18,31 @@ class ControllableOperationThread(InferenceOperationThread):
 
     def isInterruptionRequested(self):
         return self._test_cancelled
+
+
+def test_operation_state_owns_busy_close_cleanup_and_runtime_transitions():
+    state = InferenceOperationState()
+    worker = type("Worker", (), {"operation_name": INFERENCE_CLOSE})()
+
+    assert state.attach(worker)
+    assert state.busy
+    assert state.operation_name == INFERENCE_CLOSE
+    assert not state.attach(object())
+    assert state.begin_close()
+    assert not state.begin_close()
+
+    state.request_cleanup()
+    assert state.take_cleanup()
+    assert not state.take_cleanup()
+    assert state.observe_runtime_state("running")
+    assert not state.observe_runtime_state("running")
+    assert state.detach() is worker
+    assert not state.busy
+
+
+def test_operation_action_has_a_stable_fallback():
+    assert inference_operation_action("start") == "启动推理"
+    assert inference_operation_action("custom") == "推理操作"
 
 
 def test_inference_operation_emits_success_after_operation():

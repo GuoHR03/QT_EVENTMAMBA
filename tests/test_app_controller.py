@@ -79,6 +79,16 @@ def _controller(backend=None):
     return controller
 
 
+def test_controller_accepts_an_injected_backend():
+    backend = FakeBackend()
+    settings = SimpleNamespace(playback_config="config")
+
+    controller = AppController(settings, backend=backend)
+
+    assert controller.backend is backend
+    assert controller.settings is settings
+
+
 def test_set_input_file_accepts_raw_and_propagates_restart_state():
     backend = FakeBackend()
     backend.running = True

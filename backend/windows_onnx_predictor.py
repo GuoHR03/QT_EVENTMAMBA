@@ -7,6 +7,11 @@ import numpy as np
 from backend.ellipse_decoder import decode_ellipse_vsa
 from backend.inference_request import process_inference_request
 from backend.model_assets import MODE_CENTER, MODE_ELLIPSE
+from backend.model_contract import (
+    EVENT_SHAPE,
+    FPS_STAGE_COUNTS,
+    MODEL_INPUT_SHAPE,
+)
 from backend.protocol import make_error_response
 from backend.settings import DEFAULT_SENSOR_HEIGHT, DEFAULT_SENSOR_WIDTH
 from backend.windows_onnx_runtime import prepare_windows_cuda_runtime
@@ -15,16 +20,15 @@ from backend.windows_onnx_runtime import prepare_windows_cuda_runtime
 FPS_CONTRACT_NATIVE = "native"
 FPS_CONTRACT_LEGACY = "legacy"
 
-_EVENT_INPUT_SHAPE = (1, 3, 1024)
 _NATIVE_INPUT_SPEC = {
-    "events": (_EVENT_INPUT_SHAPE, "tensor(float)"),
+    "events": (MODEL_INPUT_SHAPE, "tensor(float)"),
     "fps_starts": ((1, 3), "tensor(int64)"),
 }
 _LEGACY_INPUT_SPEC = {
-    "events": (_EVENT_INPUT_SHAPE, "tensor(float)"),
-    "fps0": ((1, 512), "tensor(int64)"),
-    "fps1": ((1, 256), "tensor(int64)"),
-    "fps2": ((1, 128), "tensor(int64)"),
+    "events": (MODEL_INPUT_SHAPE, "tensor(float)"),
+    "fps0": ((1, FPS_STAGE_COUNTS[0]), "tensor(int64)"),
+    "fps1": ((1, FPS_STAGE_COUNTS[1]), "tensor(int64)"),
+    "fps2": ((1, FPS_STAGE_COUNTS[2]), "tensor(int64)"),
 }
 
 
@@ -83,20 +87,20 @@ def furthest_point_sample_indices(points, count, rng):
 
 def build_fps_inputs(events, rng):
     xyz0 = np.asarray(events, dtype=np.float32)
-    fps0 = furthest_point_sample_indices(xyz0, 512, rng)
+    fps0 = furthest_point_sample_indices(xyz0, FPS_STAGE_COUNTS[0], rng)
     xyz1 = xyz0[np.sort(fps0)]
-    fps1 = furthest_point_sample_indices(xyz1, 256, rng)
+    fps1 = furthest_point_sample_indices(xyz1, FPS_STAGE_COUNTS[1], rng)
     xyz2 = xyz1[np.sort(fps1)]
-    fps2 = furthest_point_sample_indices(xyz2, 128, rng)
+    fps2 = furthest_point_sample_indices(xyz2, FPS_STAGE_COUNTS[2], rng)
     return fps0[None], fps1[None], fps2[None]
 
 
 def build_fps_starts(rng):
     """Return the three RNG starts consumed by hierarchical native FPS."""
     starts = np.empty((1, 3), dtype=np.int64)
-    starts[0, 0] = rng.integers(0, 1024)
-    starts[0, 1] = rng.integers(0, 512)
-    starts[0, 2] = rng.integers(0, 256)
+    starts[0, 0] = rng.integers(0, EVENT_SHAPE[0])
+    starts[0, 1] = rng.integers(0, FPS_STAGE_COUNTS[0])
+    starts[0, 2] = rng.integers(0, FPS_STAGE_COUNTS[1])
     return starts
 
 
@@ -147,9 +151,9 @@ class WindowsOnnxPredictor:
 
     def run_model(self, event_data):
         event_data = np.ascontiguousarray(event_data, dtype=np.float32)
-        if event_data.shape != (1024, 3):
+        if event_data.shape != EVENT_SHAPE:
             raise ValueError(
-                f"{self.mode_name} model requires event shape (1024, 3), "
+                f"{self.mode_name} model requires event shape {EVENT_SHAPE}, "
                 f"got {event_data.shape}"
             )
         inputs = {

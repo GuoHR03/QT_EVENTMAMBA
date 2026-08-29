@@ -1,6 +1,7 @@
 import torch
 
 from backend.model_assets import MODE_CENTER, MODE_ELLIPSE, validate_model_asset
+from backend.model_contract import MODEL_INPUT_SHAPE
 from backend.models import vsa
 from backend.models.eventmamba_v1 import EventMamba as CenterEventMamba
 from backend.models.eventmamba_v3 import EventMamba as EllipseEventMamba
@@ -46,7 +47,7 @@ class CenterPredictor(BasePredictor):
 
         self.model.eval()
         self.model.apply(inplace_relu)
-        dummy_input = torch.randn(1, 3, 1024, device=self.device).float()
+        dummy_input = torch.randn(*MODEL_INPUT_SHAPE, device=self.device).float()
         with torch.inference_mode():
             self.model(dummy_input)
 
@@ -87,7 +88,7 @@ class EllipsePredictor(BasePredictor):
 
         self.model.eval()
         self.model.apply(inplace_relu)
-        dummy_input = torch.randn(1, 3, 1024, device=self.device).float()
+        dummy_input = torch.randn(*MODEL_INPUT_SHAPE, device=self.device).float()
         with torch.inference_mode():
             self.model(dummy_input)
 

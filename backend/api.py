@@ -4,7 +4,9 @@ import logging
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from backend.camera_service import CameraService
-from backend.inference_service import InferenceService, STATE_RUNNING
+from backend.inference_service import InferenceService
+from backend.inference_session_coordinator import InferenceSessionCoordinator
+from backend.model_contract import MODE_CENTER
 
 LOGGER = logging.getLogger(__name__)
 
@@ -21,7 +23,6 @@ class BackendAPI(QObject):
         super().__init__()
         self._network_result_signal.connect(self._handle_network_result)
         self.camera_queue = queue.Queue(maxsize=1)
-        self._pending_camera_network_thread = None
         self.camera = CameraService(
             self.camera_queue,
             self.image_signal,
@@ -34,8 +35,23 @@ class BackendAPI(QObject):
             self.camera_queue,
             prediction_callback=self._network_result_signal.emit,
         )
-        self.prediction_mode = "center"
+        self.prediction_mode = MODE_CENTER
+        self._session_coordinator = InferenceSessionCoordinator(
+            camera_getter=lambda: self.camera,
+            inference_getter=lambda: self.inference,
+            payload_queue_getter=lambda: self.camera_queue,
+            prediction_mode_getter=lambda: self.prediction_mode,
+        )
         self.playback_finished_signal.connect(self._handle_camera_finished)
+
+    @property
+    def _pending_camera_network_thread(self):
+        """Compatibility alias for callers migrating to the coordinator."""
+        return self._session_coordinator.pending_network_thread
+
+    @_pending_camera_network_thread.setter
+    def _pending_camera_network_thread(self, value):
+        self._session_coordinator.pending_network_thread = value
 
     def is_camera_running(self):
         return self.camera.is_running()
@@ -254,65 +270,20 @@ class BackendAPI(QObject):
         self.stop_eventmamba()
 
     def _enqueue_camera_config(self, width=None, height=None, network_thread=None):
-        if not self.camera.is_running():
-            return False
-        if self.prediction_mode not in ("center", "ellipse"):
-            return False
-        if width is None or height is None:
-            camera_size = self.camera.current_size()
-            if camera_size is None:
-                return False
-            width, height = camera_size
-        payload = {
-            "msg_type": "CONFIG",
-            "width": int(width),
-            "height": int(height),
-            "prediction_mode": self.prediction_mode,
-        }
-        if network_thread is not None:
-            replace_pending = getattr(network_thread, "replace_pending_payload", None)
-            if replace_pending is not None:
-                replace_pending(payload)
-                return True
-
-        return self._replace_camera_queue_payload(payload)
+        return self._session_coordinator.enqueue_camera_config(
+            width,
+            height,
+            network_thread,
+        )
 
     def _replace_camera_queue_payload(self, payload):
-        for _attempt in range(100):
-            try:
-                self.camera_queue.put_nowait(payload)
-                return True
-            except queue.Full:
-                try:
-                    self.camera_queue.get_nowait()
-                except queue.Empty:
-                    continue
-        LOGGER.error("Could not replace pending camera payload with CONFIG")
-        return False
+        return self._session_coordinator.replace_queue_payload(payload)
 
     def _active_network_thread(self):
-        thread = getattr(self.inference, "network_thread", None)
-        return thread if self._network_thread_is_usable(thread) else None
+        return self._session_coordinator.active_network_thread()
 
     def _network_thread_is_usable(self, thread):
-        current_thread = getattr(self.inference, "network_thread", None)
-        if thread is None or thread is not current_thread:
-            return False
-        is_running = getattr(self.inference, "is_running", None)
-        if callable(is_running):
-            try:
-                if not is_running():
-                    return False
-            except RuntimeError:
-                return False
-        elif getattr(self.inference, "state", STATE_RUNNING) != STATE_RUNNING:
-            return False
-        if not bool(getattr(thread, "running", True)):
-            return False
-        try:
-            return bool(thread.isRunning())
-        except (AttributeError, RuntimeError):
-            return False
+        return self._session_coordinator.network_thread_is_usable(thread)
 
     def _handle_network_result(self, result, timestamp, generation):
         """Forward only results belonging to the current UI-visible generation."""
@@ -330,69 +301,27 @@ class BackendAPI(QObject):
         self.prediction_signal.emit(result, int(timestamp))
 
     def _invalidate_network_for_camera_transition(self):
-        self.camera.set_analysis_enabled(False)
-        thread = self._active_network_thread()
-        if thread is None:
-            return None
-        invalidate = getattr(thread, "invalidate_generation", None)
-        if invalidate is None:
-            return None
-        invalidate()
-        self._pending_camera_network_thread = thread
-        return thread
+        return self._session_coordinator.invalidate_for_camera_transition()
 
     def _resume_network_thread(self, thread):
-        if not self._network_thread_is_usable(thread):
-            return False
-        resume = getattr(thread, "resume_generation", None)
-        if resume is not None:
-            resume()
-        self.camera.set_analysis_enabled(True)
-        if self._pending_camera_network_thread is thread:
-            self._pending_camera_network_thread = None
-        return True
+        return self._session_coordinator.resume_network_thread(thread)
 
     def _run_camera_transition(self, network_thread, operation):
-        try:
-            return operation()
-        except Exception:
-            self._resume_network_thread(network_thread)
-            raise
+        return self._session_coordinator.run_camera_transition(
+            network_thread,
+            operation,
+        )
 
     def _handle_camera_source_ready(self, width, height):
-        network_thread = self._pending_camera_network_thread
-        if network_thread is None:
-            network_thread = self._active_network_thread()
-        if network_thread is None:
-            return
-        if self._enqueue_camera_config(width, height, network_thread=network_thread):
-            self._resume_network_thread(network_thread)
+        self._session_coordinator.handle_camera_source_ready(width, height)
 
     def _handle_camera_finished(self):
         # CameraService filters this signal by source generation. A delivered
         # finish therefore belongs to the current source, including an open
         # failure emitted just before its QThread returns.
-        self._resume_network_thread(self._pending_camera_network_thread)
+        self._session_coordinator.handle_camera_finished()
 
     def _configure_network_for_camera(self, network_thread=None):
-        if network_thread is None:
-            network_thread = self._invalidate_network_for_camera_transition()
-        else:
-            # start_eventmamba_network() requested start_paused=True. The
-            # service applies that contract to both new and reused threads.
-            self._pending_camera_network_thread = network_thread
-        if network_thread is None:
-            return False
-        if not self.camera.is_running():
-            self._resume_network_thread(network_thread)
-            return False
-        camera_size = self.camera.current_size()
-        if camera_size is None:
-            return False
-        configured = self._enqueue_camera_config(
-            *camera_size,
-            network_thread=network_thread,
+        return self._session_coordinator.configure_network_for_camera(
+            network_thread,
         )
-        if configured or self.prediction_mode not in ("center", "ellipse"):
-            self._resume_network_thread(network_thread)
-        return configured

@@ -24,6 +24,29 @@ the PyTorch extension or depend on `mamba-ssm` at runtime.
 
 ## Build and verify
 
+### Prerequisites
+
+- Windows 10/11 x64.
+- Visual Studio 2022 with the C++ desktop toolchain.
+- CMake and Ninja.
+- CUDA Toolkit 12.2.
+- The project's `.venv-onnx-win` environment with ONNX Runtime GPU, NumPy and
+  the probe dependencies.
+- Network access on the first build so the script can download the two official
+  ONNX Runtime 1.27 C API headers.
+
+Important: `tools/build_selective_scan_ort.ps1` currently contains local
+Visual Studio paths under `E:/VS/...`. A clean clone on another machine will
+not build until those paths are changed or parameterized. The commands below
+describe the verified project workflow, not yet a portable one-command SDK
+bootstrap.
+
+The release packaging entry point and final asset checks are documented in
+[`PACKAGING.md`](../../PACKAGING.md). This file focuses only on custom-operator
+development.
+
+### Build the DLL and run standalone probes
+
 From the project root:
 
 ```powershell
@@ -32,17 +55,27 @@ powershell -ExecutionPolicy Bypass -File tools/build_selective_scan_ort.ps1
 .venv-onnx-win/Scripts/python.exe tools/onnx_hierarchical_fps_custom_op_probe.py
 ```
 
-Rewrite and benchmark the complete center model:
+The standalone FPS probe must match the NumPy oracle index-for-index.
+
+### Rewrite and benchmark a complete model
+
+The repository tracks `eventmamba_center_selective_scan_cuda.onnx`, which can
+be used directly as the rewrite input:
 
 ```powershell
-.venv-onnx-win/Scripts/python.exe tools/onnx_replace_selective_scan_loops.py `
-  --input artifacts/eventmamba_center_windows.onnx `
-  --output artifacts/eventmamba_center_selective_scan_cuda.onnx
-
 .venv-onnx-win/Scripts/python.exe tools/onnx_insert_hierarchical_fps.py `
   --input artifacts/eventmamba_center_selective_scan_cuda.onnx `
   --output artifacts/eventmamba_center_native_fps.onnx `
   --overwrite
+```
+
+The benchmark sample `artifacts/real_raw_sample.npz` is a local artifact and is
+not tracked. Generate it from a RAW file before running the benchmark:
+
+```powershell
+.venv-onnx-win/Scripts/python.exe tools/extract_raw_inference_sample.py `
+  record/your_sample.raw `
+  artifacts/real_raw_sample.npz
 
 .venv-onnx-win/Scripts/python.exe tools/onnx_windows_runtime_probe.py `
   --model artifacts/eventmamba_center_native_fps.onnx `
@@ -53,9 +86,14 @@ Rewrite and benchmark the complete center model:
   --repeats 100
 ```
 
-The standalone FPS probe must match the NumPy oracle index-for-index. The full
-model probe reports input preparation, ORT session, and end-to-end P50/P95
-separately so Python FPS time cannot be accidentally omitted from the baseline.
+To regenerate the tracked `*_selective_scan_cuda.onnx` source model itself,
+first export the unfused model and run `tools/onnx_replace_selective_scan_loops.py`.
+Those export inputs depend on the original PyTorch checkpoint and are outside
+the clean runtime-asset workflow.
+
+The full model probe reports input preparation, ORT session, and end-to-end
+P50/P95 separately so Python farthest-point-sampling time cannot be
+accidentally omitted from the baseline.
 
 The build script downloads only the two official ONNX Runtime 1.27 headers into
 the ignored `.native-cache` directory. Intermediate build files remain ignored;

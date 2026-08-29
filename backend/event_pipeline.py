@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any, Optional, Tuple
 
 import numpy as np
 
@@ -16,9 +17,9 @@ _ROI_NOT_PROVIDED = object()
 class InferenceWindow:
     """One event window bound to the ROI generation that produced it."""
 
-    events: object
-    roi: object
-    roi_generation: object
+    events: np.ndarray
+    roi: Optional[Tuple[int, int, int, int]]
+    roi_generation: Any
 
 
 class EventWindowSlicer:

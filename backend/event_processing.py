@@ -2,6 +2,8 @@ import queue
 
 import numpy as np
 
+from backend.model_contract import EVENT_POINT_COUNT
+
 
 EVENT_CD_DTYPE = np.dtype([("x", "<u2"), ("y", "<u2"), ("p", "i1"), ("t", "<i8")])
 
@@ -194,7 +196,7 @@ def build_inference_payload(
     height,
     roi=None,
     fallback_normalization="crop",
-    target_points=1024,
+    target_points=EVENT_POINT_COUNT,
     timestamp=None,
     rng=None,
 ):

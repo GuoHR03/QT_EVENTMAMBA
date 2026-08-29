@@ -1,24 +1,36 @@
 from dataclasses import dataclass
+from typing import Any, Callable, Optional, Protocol, Tuple
 
 from backend.event_pipeline import EventPipeline
 
 
+Roi = Optional[Tuple[int, int, int, int]]
+RoiSnapshot = Tuple[Any, Roi]
+
+
+class NoiseFilterPort(Protocol):
+    def apply(self, events):
+        ...
+
+
 @dataclass
 class CameraRunContext:
-    fps: int
-    fps_getter: object
+    """Typed runtime dependencies passed from playback to an event source."""
+
+    fps: float
+    fps_getter: Callable[[], float]
     nn_interval_us: int
     replay_factor: float
-    replay_factor_getter: object
-    is_running: object
-    roi_getter: object
-    nn_queue: object
-    noise_filter: object
-    analysis_enabled: object
-    roi_snapshot_getter: object = None
-    inference_publisher: object = None
-    inference_generation_is_current: object = None
-    progress_callback: object = None
+    replay_factor_getter: Callable[[], float]
+    is_running: Callable[[], bool]
+    roi_getter: Callable[[], Roi]
+    nn_queue: Any
+    noise_filter: NoiseFilterPort
+    analysis_enabled: Callable[[], bool]
+    roi_snapshot_getter: Optional[Callable[[], RoiSnapshot]] = None
+    inference_publisher: Optional[Callable[[Any, Any], bool]] = None
+    inference_generation_is_current: Optional[Callable[[Any], bool]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None
 
 
 def run_camera_source(source, context):

@@ -2,9 +2,22 @@
 
 ## 当前结论
 
-中心点和椭圆模型均已完成 Windows 原生 ONNX Runtime GPU 验证，并成功用同一个自定义算子 DLL 替换各自的 6 个 selective-scan `Loop`，同时把三级最远点采样从 Python 移入 ONNX 图中的 CPU 原生算子。当前真实 RAW 样本上，center 的 FPS+GPU 端到端 P50 约 `16.45 ms`，ellipse 约 `16.36 ms`。
+中心点和椭圆模型均已完成 Windows 原生 ONNX Runtime GPU 验证，并成功用同一个自定义算子 DLL 替换各自的 6 个 selective-scan `Loop`，同时把三级最远点采样（Farthest Point Sampling，FPS）从 Python 移入 ONNX 图中的 CPU 原生算子。当前真实 RAW 样本上，center 的 FPS+GPU 端到端 P50 约 `16.45 ms`，ellipse 约 `16.36 ms`。
 
 因此，中心点和椭圆推理均不再需要用户侧 WSL、PyTorch、`mamba-ssm` 或 Python FPS 循环。两种模式都已经接入 Qt 的 Windows 后端，原生模型、椭圆矩阵、Custom Op DLL 和 CUDA 运行库也已进入安装包构建链；仍需继续补测其他 NVIDIA 显卡架构。
+
+本文中的性能数字来自不同验证阶段，不能直接横向比较。主要口径如下：
+
+| 名称 | 测量边界 | 统计口径 |
+| --- | --- | --- |
+| 纯 ONNX / `session.run()` | 已准备好的模型输入到 ORT 输出 | 多次运行平均值或 P50，以对应段落为准 |
+| FPS+GPU 端到端 | 三级最远点采样、ORT 推理和输出返回 | P50/P95 |
+| 严格 ZMQ 请求 | 序列化、进程间往返、FPS 和 GPU 推理 | P50 |
+| Qt 完整链路 | Qt 调用、ZMQ、Python FPS 和 GPU 推理 | 历史预热后平均值 |
+
+现有记录没有在每组数据旁完整保存 GPU 型号、驱动版本和同步方式，因此这些
+数字用于验证优化方向，不应作为跨机器性能承诺。新基准应同时记录硬件、驱动、
+CUDA、ONNX Runtime、样本、预热次数、重复次数和统计口径。
 
 ## 验证链路
 
@@ -129,7 +142,11 @@ events [B,3,1024] + fps_starts [B,3]
 - 历史 Qt、ZMQ、Python FPS 与 GPU 完整链路预热后平均：`46.84 ms`
 - 输出顺序：`[x, y, a, b, angle]`
 
-正式 native-FPS ONNX、椭圆矩阵和 Custom Op DLL 作为版本化发布资产保留；其余实验模型、NPZ、构建目录、依赖头文件和运行库缓存继续忽略。
+资产分为三类：
+
+- **正式运行资产**：两个 `*_native_fps.onnx`、椭圆 `matrix_A.npy` 和 Custom Op DLL，均由版本控制保留并进入安装包。
+- **可复现源资产**：两个 `*_selective_scan_cuda.onnx`，由版本控制保留，用于重新插入原生三级 FPS。
+- **本地实验资产**：其他实验模型、NPZ、日志、构建目录、依赖头文件和运行库缓存，默认忽略。
 
 ## 后续工作
 

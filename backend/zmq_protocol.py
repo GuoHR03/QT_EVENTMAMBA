@@ -4,6 +4,8 @@ import math
 import numpy as np
 import zmq
 
+from backend.model_contract import EVENT_SHAPE, get_model_spec
+
 
 PROTOCOL_NAME = "eventmamba"
 PROTOCOL_VERSION = 1
@@ -14,7 +16,6 @@ MAX_TEXT_CHARS = 4096
 MAX_NONCE_CHARS = 256
 MAX_SENSOR_DIMENSION = 16384
 
-EVENT_SHAPE = (1024, 3)
 EVENT_DTYPE_NAME = "<f4"
 EVENT_DTYPE = np.dtype(EVENT_DTYPE_NAME)
 EVENT_BODY_BYTES = int(np.prod(EVENT_SHAPE)) * EVENT_DTYPE.itemsize
@@ -288,7 +289,7 @@ def validate_response_message(message):
     if type(message["cropped"]) is not bool:
         raise ZmqProtocolError("cropped must be a boolean")
     values = message["values"]
-    expected_length = 2 if message["mode"] == "center" else 5
+    expected_length = get_model_spec(message["mode"]).output_size
     if not isinstance(values, (list, tuple)) or len(values) != expected_length:
         raise ZmqProtocolError("prediction has an invalid value count")
     for value in values:
@@ -330,7 +331,9 @@ def _validate_dimension(value, label):
 
 
 def _validate_mode(value):
-    if value not in ("center", "ellipse"):
+    try:
+        get_model_spec(value)
+    except ValueError:
         raise ZmqProtocolError("unsupported prediction mode")
 
 
