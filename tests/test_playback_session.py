@@ -1,7 +1,10 @@
+import threading
+
 import pytest
 
 from backend.camera_source_runner import CameraRunContext
 from backend.event_source import SourceMetadata
+from backend.lifecycle import STATE_FAILED, STATE_STARTING, STATE_STOPPED
 from backend.playback_session import PlaybackSession
 
 
@@ -66,6 +69,8 @@ def test_playback_session_owns_source_filter_and_worker_lifecycle():
     context = _context()
     session = PlaybackSession(source, context, worker)
 
+    assert session.state == STATE_STARTING
+
     session.run()
 
     assert source.run_count == 1
@@ -75,6 +80,7 @@ def test_playback_session_owns_source_filter_and_worker_lifecycle():
     assert (worker.start_count, worker.stop_count, worker.wait_count) == (1, 1, 1)
     assert worker.stop_modes == [False]
     assert not session.is_running()
+    assert session.state == STATE_STOPPED
 
 
 def test_playback_session_cleans_up_after_source_error():
@@ -88,6 +94,8 @@ def test_playback_session_cleans_up_after_source_error():
     assert source.close_count == 1
     assert (worker.stop_count, worker.wait_count) == (1, 1)
     assert worker.stop_modes == [True]
+    assert session.state == STATE_FAILED
+    assert session.last_error == "failed"
 
 
 def test_playback_session_stop_before_run_skips_source_and_worker():
@@ -105,6 +113,29 @@ def test_playback_session_stop_before_run_skips_source_and_worker():
     assert worker.stop_count == 1
     assert worker.stop_modes == [True]
     assert worker.wait_count == 0
+    assert session.state == STATE_STOPPED
+
+
+def test_playback_session_stop_wakes_interruptible_source_wait():
+    entered_wait = threading.Event()
+    source = Source()
+
+    def run(context, _event_pipeline):
+        entered_wait.set()
+        context.wait_for_stop(10)
+
+    source.run = run
+    session = PlaybackSession(source, _context())
+    runner = threading.Thread(target=session.run)
+    runner.start()
+
+    assert entered_wait.wait(1)
+    session.stop()
+    runner.join(1)
+
+    assert not runner.is_alive()
+    assert source.request_stop_count == 1
+    assert source.close_count == 1
 
 
 def _context():

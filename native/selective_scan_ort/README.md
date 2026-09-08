@@ -35,11 +35,40 @@ the PyTorch extension or depend on `mamba-ssm` at runtime.
 - Network access on the first build so the script can download the two official
   ONNX Runtime 1.27 C API headers.
 
-Important: `tools/build_selective_scan_ort.ps1` currently contains local
-Visual Studio paths under `E:/VS/...`. A clean clone on another machine will
-not build until those paths are changed or parameterized. The commands below
-describe the verified project workflow, not yet a portable one-command SDK
-bootstrap.
+`tools/build_selective_scan_ort.ps1` resolves the toolchain in this order:
+
+1. Explicit command-line parameters.
+2. `VSINSTALLDIR`, `VSWHERE`, `VSDEVCMD`, `CMAKE_EXE`, `NINJA_EXE`,
+   `CUDA_PATH_V12_2` and `CUDA_PATH` environment variables.
+3. Tools on `PATH`, Visual Studio discovery through `vswhere.exe`, and the
+   standard CUDA 12.2 installation directory.
+
+Use `-ResolveOnly` to print the selected paths without downloading headers,
+configuring CMake or writing build outputs:
+
+```powershell
+.\tools\build_selective_scan_ort.ps1 -ResolveOnly
+```
+
+Every detected file and CUDA installation is validated before configuration.
+For a non-standard toolchain, override only the necessary values:
+
+```powershell
+.\tools\build_selective_scan_ort.ps1 `
+  -VsInstallPath D:\Tools\VisualStudio2022 `
+  -CMakePath D:\Tools\cmake\bin\cmake.exe `
+  -NinjaPath D:\Tools\ninja.exe `
+  -CudaRoot D:\NVIDIA\CUDA\v12.2
+```
+
+For a complete compiler verification without replacing the tracked release
+DLL, use an ignored build directory together with `-NoDeploy`:
+
+```powershell
+.\tools\build_selective_scan_ort.ps1 `
+  -BuildDir .native-cache\selective-scan-verify `
+  -NoDeploy
+```
 
 The release packaging entry point and final asset checks are documented in
 [`PACKAGING.md`](../../PACKAGING.md). This file focuses only on custom-operator
@@ -95,6 +124,7 @@ The full model probe reports input preparation, ORT session, and end-to-end
 P50/P95 separately so Python farthest-point-sampling time cannot be
 accidentally omitted from the baseline.
 
-The build script downloads only the two official ONNX Runtime 1.27 headers into
-the ignored `.native-cache` directory. Intermediate build files remain ignored;
-the verified runtime DLL is copied to `native/selective_scan_ort/bin/`.
+The build script downloads only the two official ONNX Runtime 1.27 headers from
+the Microsoft ONNX Runtime repository into the ignored `.native-cache`
+directory. Intermediate build files remain ignored; the verified runtime DLL
+is copied to `native/selective_scan_ort/bin/`.

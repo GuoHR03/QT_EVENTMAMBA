@@ -76,6 +76,7 @@ class ReplayClock:
         reset_sensor_time=None,
         replay_factor_getter=None,
         factor_reset_sensor_time=None,
+        wait_for_stop=None,
     ):
         current_time = now()
         if replay_factor_getter is not None:
@@ -86,7 +87,10 @@ class ReplayClock:
 
         sleep_time = self.sleep_time_s(target_sensor_time, current_time)
         if sleep_time > min_sleep_s:
-            sleep(sleep_time)
+            if wait_for_stop is not None:
+                wait_for_stop(sleep_time)
+            else:
+                sleep(sleep_time)
             return sleep_time
         if should_reset_replay_clock(sleep_time, reset_threshold_s):
             self.start_real_time = current_time

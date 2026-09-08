@@ -31,6 +31,7 @@ class CameraRunContext:
     inference_publisher: Optional[Callable[[Any, Any], bool]] = None
     inference_generation_is_current: Optional[Callable[[Any], bool]] = None
     progress_callback: Optional[Callable[[int, int], None]] = None
+    wait_for_stop: Optional[Callable[[float], bool]] = None
 
 
 def run_camera_source(source, context):

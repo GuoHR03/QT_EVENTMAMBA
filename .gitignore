@@ -39,6 +39,7 @@ artifacts/*.npy
 !artifacts/eventmamba_ellipse_native_fps.onnx
 !artifacts/eventmamba_ellipse_matrix_A.npy
 .venv-onnx-win/
+.venv-dev/
 .onnx-wheel-cache/
 .native-cache/
 native/selective_scan_ort/build/
@@ -58,6 +59,8 @@ scripts/*.ps1
 !scripts/uninstall_wsl.bat
 !scripts/run_app.bat
 !scripts/build_installer.ps1
+!scripts/setup_dev.ps1
+!scripts/check.ps1
 
 # Historical notes
 OPTIMIZATION_NOTES.md

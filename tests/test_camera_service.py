@@ -4,6 +4,7 @@ import pytest
 
 from backend.camera_service import CameraService
 from backend.camera_service import SOURCE_MODE_FILE, SOURCE_MODE_LIVE
+from backend.lifecycle import STATE_FAILED, STATE_RUNNING, STATE_STOPPED
 
 
 class FakeSignal:
@@ -103,7 +104,12 @@ class FakeMetadataService:
         return True
 
 
-def _service(metadata_service=None, frame_queue=None, source_ready_callback=None):
+def _service(
+    metadata_service=None,
+    frame_queue=None,
+    source_ready_callback=None,
+    state_callback=None,
+):
     created_threads = []
 
     def thread_factory(**kwargs):
@@ -121,6 +127,7 @@ def _service(metadata_service=None, frame_queue=None, source_ready_callback=None
         thread_factory=thread_factory,
         metadata_service=metadata_service or FakeMetadataService(),
         source_ready_callback=source_ready_callback,
+        state_callback=state_callback,
     )
     return service, created_threads, signals
 
@@ -149,6 +156,27 @@ def test_camera_service_injects_thread_and_metadata_dependencies():
     assert thread.stopped
     assert thread.deleted
     assert service.thread is None
+
+
+def test_camera_service_reports_shared_lifecycle_transitions():
+    transitions = []
+    service, _threads, _signals = _service(
+        state_callback=lambda state, error: transitions.append((state, error))
+    )
+
+    assert service.state == STATE_STOPPED
+    service.start()
+    assert service.state == STATE_RUNNING
+    service.stop()
+
+    assert service.state == STATE_STOPPED
+    assert service.last_error is None
+    assert [state for state, _error in transitions] == [
+        "starting",
+        "running",
+        "stopping",
+        "stopped",
+    ]
 
 
 def test_camera_service_persists_and_forwards_inference_generation_gate():
@@ -336,15 +364,15 @@ def test_camera_service_ignores_stale_source_ready_signal():
     assert ready_sizes == [(320, 240)]
 
 
-def test_failed_forced_stop_retains_thread_and_aborts_source_switch():
+def test_failed_cooperative_stop_retains_thread_and_aborts_source_switch():
     frame_queue = queue.Queue()
     service, threads, _signals = _service(frame_queue=frame_queue)
     service.start()
     old_thread = threads[0]
-    old_thread.wait_results = [False, False, False]
+    old_thread.wait_results = [False]
     frame_queue.put_nowait({"msg_type": "EVENTS"})
 
-    with pytest.raises(RuntimeError, match="could not be stopped"):
+    with pytest.raises(RuntimeError, match="did not stop cooperatively"):
         service.set_input_file("new.raw", restart_if_running=True)
 
     assert service.thread is old_thread
@@ -352,6 +380,28 @@ def test_failed_forced_stop_retains_thread_and_aborts_source_switch():
     assert service.source_mode == SOURCE_MODE_LIVE
     assert not old_thread.deleted
     assert old_thread.interruption_requested
-    assert old_thread.terminated
+    assert not old_thread.terminated
     assert len(threads) == 1
     assert not frame_queue.empty()
+    assert service.state == STATE_FAILED
+    assert "did not stop cooperatively" in service.last_error
+
+
+def test_camera_service_can_retry_cooperative_stop_after_timeout():
+    service, threads, _signals = _service()
+    service.start()
+    thread = threads[0]
+    thread.wait_results = [False, True]
+
+    with pytest.raises(RuntimeError, match="did not stop cooperatively"):
+        service.stop()
+
+    assert service.thread is thread
+    assert not thread.deleted
+
+    service.stop()
+
+    assert service.thread is None
+    assert thread.deleted
+    assert not thread.terminated
+    assert service.state == STATE_STOPPED

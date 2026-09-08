@@ -56,6 +56,14 @@ class BackendAPI(QObject):
     def is_camera_running(self):
         return self.camera.is_running()
 
+    @property
+    def camera_state(self):
+        return self.camera.state
+
+    @property
+    def camera_last_error(self):
+        return self.camera.last_error
+
     def is_inference_running(self):
         running = self.inference.is_running()
         if not running:

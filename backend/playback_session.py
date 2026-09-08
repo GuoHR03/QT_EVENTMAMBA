@@ -1,27 +1,55 @@
 from threading import Event, Lock
 
 from backend.camera_source_runner import close_camera_source, run_camera_source
+from backend.lifecycle import (
+    STATE_FAILED,
+    STATE_RUNNING,
+    STATE_STARTING,
+    STATE_STOPPED,
+    STATE_STOPPING,
+    LifecycleStateMachine,
+)
 
 
 class PlaybackSession:
     """Own one source playback lifecycle independently of Qt."""
 
-    def __init__(self, source, context, inference_worker=None):
+    def __init__(self, source, context, inference_worker=None, state_callback=None):
         self.source = source
         self.context = context
         self.inference_worker = inference_worker
-        self._running = Event()
-        self._running.set()
+        self._lifecycle = LifecycleStateMachine(
+            initial=STATE_STARTING,
+            callback=state_callback,
+        )
         self._stop_requested = Event()
         self._worker_started = False
         self._worker_stop_requested = False
         self._worker_stop_lock = Lock()
         self.context.is_running = self.is_running
+        self.context.wait_for_stop = self._stop_requested.wait
 
     def is_running(self):
-        return self._running.is_set()
+        return self.state in (STATE_STARTING, STATE_RUNNING)
+
+    @property
+    def state(self):
+        return self._lifecycle.state
+
+    @property
+    def last_error(self):
+        return self._lifecycle.last_error
 
     def run(self):
+        try:
+            self._run()
+        except Exception as exc:
+            self._lifecycle.transition(STATE_FAILED, error=exc)
+            raise
+        else:
+            self._lifecycle.transition(STATE_STOPPED)
+
+    def _run(self):
         completed_naturally = False
         try:
             if not self.is_running():
@@ -31,10 +59,10 @@ class PlaybackSession:
             self.context.noise_filter.initialize(metadata.width, metadata.height)
             self._start_worker()
             if self.is_running():
+                self._lifecycle.transition(STATE_RUNNING)
                 run_camera_source(self.source, self.context)
                 completed_naturally = not self._stop_requested.is_set()
         finally:
-            self._running.clear()
             self._request_worker_stop(
                 discard_pending=self._stop_requested.is_set() or not completed_naturally,
             )
@@ -42,10 +70,12 @@ class PlaybackSession:
             close_camera_source(self.source)
 
     def stop(self):
+        if self.state in (STATE_STOPPED, STATE_FAILED):
+            return
+        self._lifecycle.transition(STATE_STOPPING)
         if self._stop_requested.is_set():
             return
         self._stop_requested.set()
-        self._running.clear()
         request_stop = getattr(self.source, "request_stop", None)
         if callable(request_stop):
             request_stop()

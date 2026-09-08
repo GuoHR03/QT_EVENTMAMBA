@@ -1,0 +1,105 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests and static checks
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+      UI_EVENT_ALLOW_QT_STUBS: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13.5
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.5"
+          cache: pip
+          cache-dependency-path: |
+            requirements/ci-py313.txt
+            requirements/test-py313.txt
+            requirements/dev.txt
+
+      - name: Install CI dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements/ci-py313.txt
+
+      - name: Validate test dependency contract and real Qt
+        run: |
+          python tools/validate_runtime_contract.py --role test
+          python -c "from PyQt6 import QtCore; print('Qt mode: real; PyQt6=' + QtCore.PYQT_VERSION_STR)"
+
+      - name: Run test suite
+        run: python -m pytest -q
+
+      - name: Run type checks
+        run: >-
+          python -m mypy app backend tools/validate_runtime_contract.py
+          --ignore-missing-imports --no-error-summary
+
+      - name: Validate PowerShell script syntax
+        shell: pwsh
+        run: |
+          foreach ($script in @(
+            "scripts/setup_dev.ps1",
+            "scripts/check.ps1",
+            "scripts/build_installer.ps1",
+            "tools/build_selective_scan_ort.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count) {
+              $errors | Format-List
+              exit 1
+            }
+          }
+
+  ui-runtime:
+    name: Python 3.8 Metavision smoke
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.8.20
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8.20"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: requirements/ui-py38.txt
+
+      - name: Install pinned UI dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements/ui-py38.txt
+
+      - name: Validate UI runtime contract
+        run: python tools/validate_runtime_contract.py --role ui --sdk-root libs
+
+      - name: Import Metavision runtime and initialize processing components
+        run: python main.py --runtime-smoke-test
+
+      - name: Construct and close the real Qt main window
+        run: python tools/smoke_ui_window.py --timeout-ms 15000

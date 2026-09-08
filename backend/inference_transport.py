@@ -27,10 +27,19 @@ def stop_network_thread(thread):
     if thread is None:
         return True
     thread.stop()
-    if thread.isRunning() and not thread.wait(2000):
-        thread.terminate()
-        thread.wait(500)
+    request_interruption = getattr(thread, "requestInterruption", None)
+    if callable(request_interruption):
+        request_interruption()
+    stop_timeout_ms = max(
+        1,
+        int(getattr(thread, "cooperative_stop_timeout_ms", 2500)),
+    )
     if thread.isRunning():
-        raise RuntimeError("Inference network thread did not stop")
+        thread.wait(stop_timeout_ms)
+    if thread.isRunning():
+        raise RuntimeError(
+            "Inference network thread did not stop cooperatively; "
+            "the live handle was retained for a safe retry"
+        )
     thread.deleteLater()
     return True

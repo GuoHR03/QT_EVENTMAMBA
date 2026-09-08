@@ -1,5 +1,6 @@
 from dataclasses import dataclass, replace
 from threading import Lock
+from typing import Optional, Tuple
 
 from backend.event_processing import normalize_noise_filter_type
 from backend.replay_clock import normalize_fps
@@ -17,7 +18,7 @@ class PlaybackConfig:
     palette: str = "Dark"
     fps: float = DEFAULT_FPS
     replay_factor: float = DEFAULT_REPLAY_FACTOR
-    roi: tuple = None
+    roi: Optional[Tuple[int, int, int, int]] = None
     noise_filter_type: str = "none"
     noise_filter_threshold_us: int = DEFAULT_NOISE_FILTER_THRESHOLD_US
     nn_interval_ms: int = DEFAULT_NN_INTERVAL_MS

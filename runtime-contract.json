@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "project_version": "0.2.1",
+  "roles": {
+    "ui": {
+      "python": "3.8.20",
+      "packages": {
+        "PyQt6": "6.7.1",
+        "PyQt6-Qt6": "6.7.3",
+        "PyQt6-sip": "13.8.0",
+        "numpy": "1.24.4",
+        "pyzmq": "27.1.0",
+        "opencv-python": "4.13.0.90",
+        "h5py": "3.11.0",
+        "dv-processing": "2.0.3",
+        "pyinstaller": "6.19.0",
+        "pyinstaller-hooks-contrib": "2026.3"
+      },
+      "metavision": {
+        "version": "4.6.2",
+        "version_file": "bin/metavision_sdk_core.dll",
+        "python_abi": "cp38",
+        "required_extensions": [
+          "metavision_hal_internal.cp38-win_amd64.pyd",
+          "metavision_sdk_base_internal.cp38-win_amd64.pyd",
+          "metavision_sdk_base_paths_internal.cp38-win_amd64.pyd",
+          "metavision_sdk_core_internal.cp38-win_amd64.pyd",
+          "metavision_sdk_cv_internal.cp38-win_amd64.pyd"
+        ]
+      }
+    },
+    "windows_backend": {
+      "python": "3.13.5",
+      "packages": {
+        "onnxruntime-gpu": "1.27.0",
+        "onnx": "1.22.0",
+        "numpy": "2.5.1",
+        "pyzmq": "27.1.0",
+        "flatbuffers": "25.12.19",
+        "protobuf": "7.35.1",
+        "pyinstaller": "6.19.0",
+        "pyinstaller-hooks-contrib": "2026.6",
+        "nvidia-cublas": "13.0.2.14",
+        "nvidia-cuda-nvrtc": "13.0.88",
+        "nvidia-cuda-runtime": "13.0.96",
+        "nvidia-cudnn-cu13": "9.13.1.26",
+        "nvidia-cufft": "12.0.0.61",
+        "nvidia-curand": "10.4.0.35",
+        "nvidia-nvjitlink": "13.0.88"
+      },
+      "native_operator": {
+        "onnxruntime_c_api": "1.27",
+        "build_cuda_toolkit": "12.2"
+      }
+    },
+    "test": {
+      "python": "3.13.5",
+      "packages": {
+        "pytest": "8.3.4",
+        "mypy": "1.14.1",
+        "PyQt6": "6.7.1",
+        "PyQt6-Qt6": "6.7.3",
+        "PyQt6-sip": "13.11.0",
+        "numpy": "2.2.6",
+        "pyzmq": "26.2.0",
+        "opencv-python": "4.12.0.88",
+        "h5py": "3.14.0",
+        "onnx": "1.22.0"
+      }
+    }
+  }
+}

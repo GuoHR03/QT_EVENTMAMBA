@@ -24,6 +24,7 @@ def run_aedat4_replay_loop(
     fps_getter=None,
     start_time_us=0,
     progress_callback=None,
+    wait_for_stop=None,
     sleep=time.sleep,
     now=time.perf_counter,
 ):
@@ -91,6 +92,7 @@ def run_aedat4_replay_loop(
                 fps,
                 fps_getter,
                 frame_buffer_roi,
+                wait_for_stop,
             )
 
     if (
@@ -112,6 +114,7 @@ def _drain_frame_chunks(
     fps=None,
     fps_getter=None,
     roi=None,
+    wait_for_stop=None,
 ):
     if not frame_buffer:
         clock.reschedule_next_frame(_active_frame_interval_us(fps, fps_getter), clock.next_frame_time)
@@ -124,7 +127,7 @@ def _drain_frame_chunks(
         clock.advance_frame()
         return []
 
-    while frame_chunk is not None:
+    while frame_chunk is not None and is_running():
         if not event_pipeline.is_roi_current(roi):
             return []
         clock.sleep_until(
@@ -134,9 +137,10 @@ def _drain_frame_chunks(
             reset_sensor_time=clock.next_frame_time,
             replay_factor_getter=replay_factor_getter,
             factor_reset_sensor_time=clock.next_frame_time - clock.frame_interval_us,
+            wait_for_stop=wait_for_stop,
         )
 
-        if not event_pipeline.is_roi_current(roi):
+        if not is_running() or not event_pipeline.is_roi_current(roi):
             return []
         if len(frame_chunk) > 0 and is_running():
             event_pipeline.render_events(frame_chunk)

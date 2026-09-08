@@ -1,5 +1,8 @@
 """Coordinate asynchronous inference operations outside the main window."""
 
+from dataclasses import dataclass
+from typing import Any, Callable
+
 from backend.inference_lifecycle import (
     STATE_ERROR,
     STATE_RUNNING,
@@ -7,6 +10,7 @@ from backend.inference_lifecycle import (
     STATE_STOPPING,
 )
 
+from .display_names import MODE_DISPLAY_NAMES
 from .inference_operation import InferenceOperationThread
 from .inference_operation_state import (
     INFERENCE_CLEANUP,
@@ -19,14 +23,31 @@ from .inference_operation_state import (
 )
 
 
+@dataclass(frozen=True)
+class InferenceUiPorts:
+    parent: Any
+    controller: Any
+    view_state: Any
+    predictions: Any
+    settings: Any
+    append_log: Callable[[str, str], None]
+    set_prediction_mode_controls_enabled: Callable[[bool], None]
+    set_window_enabled: Callable[[bool], None]
+    start_health_timer: Callable[[], None]
+    begin_close_cleanup: Callable[[], None]
+    complete_close: Callable[[], None]
+    choose_weights_file: Callable[[], Any]
+    shutdown: Any = None
+
+
 class InferenceOperationCoordinator:
     """Own worker callbacks and recovery ordering for inference operations."""
 
-    def __init__(self, window, state=None, worker_factory=None, defer=None):
-        self.window = window
-        self.controller = window.controller
-        self.view_state = window.view_state
-        self.predictions = window.predictions
+    def __init__(self, ports, state=None, worker_factory=None, defer=None):
+        self.ports = ports
+        self.controller = ports.controller
+        self.view_state = ports.view_state
+        self.predictions = ports.predictions
         self.state = state or InferenceOperationState()
         self.worker_factory = worker_factory or InferenceOperationThread
         self.defer = defer or _defer_to_qt_event_loop
@@ -41,7 +62,7 @@ class InferenceOperationCoordinator:
             self.controller.stop_model_network()
         except Exception as exc:
             self.view_state.set_model_error()
-            self.window.append_log(
+            self.ports.append_log(
                 f"{action}推理前停止网络线程失败：{exc}",
                 "error",
             )
@@ -49,14 +70,79 @@ class InferenceOperationCoordinator:
             return False
         return True
 
+    def select_weight_file(self):
+        if self.controller.is_inference_running():
+            self.ports.append_log(
+                "请先停止推理服务，再选择其他模型",
+                "warning",
+            )
+            return
+        weights_path = self.ports.choose_weights_file()
+        if not weights_path:
+            return
+        self.view_state.set_weight_file(weights_path)
+        self.controller.set_weights_path(weights_path)
+
+    def load_model(self):
+        if self.state.close_pending:
+            return
+        if self.busy:
+            self.ports.append_log("已有推理服务操作正在进行，请稍候", "warning")
+            return
+        if self.controller.weights_path is None:
+            self.ports.append_log("请先选择模型文件", "warning")
+            return
+        if not self.stop_network_before_backend("启动"):
+            return
+
+        runtime_name = self.controller.inference_runtime_display_name
+        self.view_state.set_model_starting()
+        prediction_mode = self.ports.settings.prediction_mode
+        self.ports.append_log(
+            f"正在启动 {runtime_name} 推理服务并加载"
+            f"{MODE_DISPLAY_NAMES.get(prediction_mode, prediction_mode)}模型，"
+            "首次加载可能需要几秒钟...",
+            "info",
+        )
+        return self.start(INFERENCE_START, self.controller.load_model)
+
+    def unload_model(self):
+        if self.state.close_pending:
+            return
+        if self.busy:
+            self.ports.append_log("已有推理服务操作正在进行，请稍候", "warning")
+            return
+        runtime_name = self.controller.inference_runtime_display_name
+        self.view_state.set_model_stopping()
+        if not self.stop_network_before_backend("停止"):
+            return
+        self.ports.append_log(f"正在停止 {runtime_name} 推理服务...", "info")
+        return self.start(INFERENCE_STOP, self.controller.unload_model)
+
+    def restart_model(self):
+        if self.state.close_pending:
+            return
+        if self.busy:
+            self.ports.append_log("已有推理服务操作正在进行，请稍候", "warning")
+            return
+        if self.controller.weights_path is None:
+            self.ports.append_log("请先选择模型文件", "warning")
+            return
+        runtime_name = self.controller.inference_runtime_display_name
+        self.view_state.set_model_starting()
+        if not self.stop_network_before_backend("重启"):
+            return
+        self.ports.append_log(f"正在重启 {runtime_name} 推理服务...", "info")
+        return self.start(INFERENCE_RESTART, self.controller.restart_model)
+
     def start(self, operation_name, operation, allow_when_closing=False):
         if self.state.close_pending and not allow_when_closing:
             return False
         if self.busy:
-            self.window.append_log("已有推理服务操作正在进行，请稍候", "warning")
+            self.ports.append_log("已有推理服务操作正在进行，请稍候", "warning")
             return False
 
-        worker = self.worker_factory(operation_name, operation, self.window)
+        worker = self.worker_factory(operation_name, operation, self.ports.parent)
         worker.succeeded.connect(self.handle_success)
         worker.failed.connect(self.handle_failure)
         worker.cancelled.connect(self.handle_cancelled)
@@ -65,13 +151,13 @@ class InferenceOperationCoordinator:
             worker.deleteLater()
             return False
 
-        self.window._set_prediction_mode_controls_enabled(False)
+        self.ports.set_prediction_mode_controls_enabled(False)
         try:
             worker.start()
         except Exception as exc:
             self.state.detach()
             worker.deleteLater()
-            self.window._set_prediction_mode_controls_enabled(True)
+            self.ports.set_prediction_mode_controls_enabled(True)
             self.handle_failure(operation_name, str(exc))
             return False
         return True
@@ -84,11 +170,11 @@ class InferenceOperationCoordinator:
         if operation_name == INFERENCE_STOP:
             self.view_state.set_model_stopped()
             self.predictions.clear()
-            self.window.append_log(f"{runtime_name} 推理服务已停止", "info")
+            self.ports.append_log(f"{runtime_name} 推理服务已停止", "info")
         elif operation_name == INFERENCE_CLEANUP:
             self.view_state.set_model_stopped()
             self.predictions.clear()
-            self.window.append_log("失败操作残留的推理后端已清理", "info")
+            self.ports.append_log("失败操作残留的推理后端已清理", "info")
         elif operation_name in (INFERENCE_START, INFERENCE_RESTART):
             try:
                 self.controller.start_model_network()
@@ -99,7 +185,7 @@ class InferenceOperationCoordinator:
                 self.view_state.set_weight_file(self.controller.active_model_path)
             self.view_state.set_model_running()
             action = "启动" if operation_name == INFERENCE_START else "重启"
-            self.window.append_log(
+            self.ports.append_log(
                 f"{runtime_name} 推理服务已{action}",
                 "success",
             )
@@ -115,7 +201,7 @@ class InferenceOperationCoordinator:
         self.state.request_cleanup()
         self.view_state.set_model_error()
         action = "启动" if operation_name == INFERENCE_START else "重启"
-        self.window.append_log(
+        self.ports.append_log(
             f"{action}推理网络失败：{error}{cleanup_details}；正在清理后端",
             "error",
         )
@@ -123,12 +209,16 @@ class InferenceOperationCoordinator:
 
     def handle_failure(self, operation_name, message):
         action = inference_operation_action(operation_name)
-        self.window.append_log(f"{action}失败：{message}", "error")
+        self.ports.append_log(f"{action}失败：{message}", "error")
 
         if operation_name == INFERENCE_CLOSE:
-            self.state.abort_close()
-            self.window.setEnabled(True)
-            self.window._inference_health_timer.start()
+            shutdown = self.ports.shutdown
+            if shutdown is not None:
+                shutdown.abort(message)
+            else:
+                self.state.abort_close()
+            self.ports.set_window_enabled(True)
+            self.ports.start_health_timer()
             self.view_state.set_model_error()
             self._observe_runtime_state()
             return
@@ -139,17 +229,21 @@ class InferenceOperationCoordinator:
 
     def handle_cancelled(self, operation_name):
         if operation_name == INFERENCE_CLOSE:
-            self.state.abort_close()
-            self.window.setEnabled(True)
-            self.window._inference_health_timer.start()
+            shutdown = self.ports.shutdown
+            if shutdown is not None:
+                shutdown.abort("关闭清理被取消")
+            else:
+                self.state.abort_close()
+            self.ports.set_window_enabled(True)
+            self.ports.start_health_timer()
             self.view_state.set_model_error()
-            self.window.append_log("关闭清理被取消，窗口保持打开", "warning")
+            self.ports.append_log("关闭清理被取消，窗口保持打开", "warning")
             self._observe_runtime_state()
             return
         if self.state.close_pending:
             return
         self.view_state.set_model_error()
-        self.window.append_log(f"推理操作已取消：{operation_name}", "warning")
+        self.ports.append_log(f"推理操作已取消：{operation_name}", "warning")
         self._observe_runtime_state()
 
     def finish(self):
@@ -162,9 +256,9 @@ class InferenceOperationCoordinator:
         if self.state.close_pending:
             self.state.clear_cleanup()
             if operation_name == INFERENCE_CLOSE:
-                self.window._complete_close()
+                self.ports.complete_close()
             else:
-                self.defer(self.window._begin_close_cleanup)
+                self.defer(self.ports.begin_close_cleanup)
             return
 
         if self.state.take_cleanup():
@@ -172,20 +266,20 @@ class InferenceOperationCoordinator:
             self.defer(self.start_backend_cleanup)
             return
 
-        self.window._set_prediction_mode_controls_enabled(True)
+        self.ports.set_prediction_mode_controls_enabled(True)
 
     def start_backend_cleanup(self):
         if self.state.close_pending:
-            self.window._begin_close_cleanup()
+            self.ports.begin_close_cleanup()
             return
         started = self.start(
             INFERENCE_CLEANUP,
             self.controller.unload_model,
         )
         if not started:
-            self.window._set_prediction_mode_controls_enabled(True)
+            self.ports.set_prediction_mode_controls_enabled(True)
             self.view_state.set_model_error()
-            self.window.append_log(
+            self.ports.append_log(
                 "无法启动推理后端清理任务",
                 "error",
             )
@@ -208,7 +302,7 @@ class InferenceOperationCoordinator:
         elif state == STATE_ERROR:
             self.view_state.set_model_error()
             if self.controller.inference_last_error:
-                self.window.append_log(
+                self.ports.append_log(
                     f"推理服务异常：{self.controller.inference_last_error}",
                     "error",
                 )

@@ -1,5 +1,7 @@
+import os
 import sys
 import types
+import warnings
 
 
 class _BoundSignal:
@@ -58,10 +60,22 @@ class _QThread(_QObject):
 
 try:
     __import__("PyQt6.QtCore")
-except (ImportError, OSError):
+except (ImportError, OSError) as exc:
     # Some lightweight test environments have the PyQt6 Python package but
-    # not its native Qt DLLs. Stub only that case; a healthy Qt installation
-    # must exercise the real QObject/QThread implementations.
+    # not its native Qt DLLs. A stub must now be requested explicitly so a
+    # broken local Qt installation cannot silently produce a green test run.
+    allow_stubs = os.environ.get("UI_EVENT_ALLOW_QT_STUBS", "").strip().lower()
+    if allow_stubs not in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "PyQt6.QtCore could not be imported. Run tests from .venv-dev, "
+            "or explicitly set UI_EVENT_ALLOW_QT_STUBS=1 for a stub-only "
+            "logic test run."
+        ) from exc
+    warnings.warn(
+        "UI_EVENT_ALLOW_QT_STUBS is enabled; Qt thread and signal behavior "
+        "is simulated in this test run.",
+        RuntimeWarning,
+    )
     pyqt6 = sys.modules.get("PyQt6") or types.ModuleType("PyQt6")
     qtcore = types.ModuleType("PyQt6.QtCore")
     qtcore.QObject = _QObject
@@ -70,3 +84,6 @@ except (ImportError, OSError):
     pyqt6.QtCore = qtcore
     sys.modules["PyQt6"] = pyqt6
     sys.modules["PyQt6.QtCore"] = qtcore
+    os.environ["UI_EVENT_QT_MODE"] = "stub"
+else:
+    os.environ["UI_EVENT_QT_MODE"] = "real"

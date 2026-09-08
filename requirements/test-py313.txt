@@ -1,0 +1,11 @@
+# Reproducible hardware-independent test environment for CPython 3.13.5.
+pytest==8.3.4
+mypy==1.14.1
+PyQt6==6.7.1
+PyQt6-Qt6==6.7.3
+PyQt6-sip==13.11.0
+numpy==2.2.6
+pyzmq==26.2.0
+opencv-python==4.12.0.88
+h5py==3.14.0
+onnx==1.22.0

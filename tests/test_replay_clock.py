@@ -36,6 +36,23 @@ def test_replay_clock_sleep_until_sleeps_when_ahead():
     assert sleeps == [pytest.approx(0.015)]
 
 
+def test_replay_clock_sleep_until_uses_interruptible_stop_wait():
+    clock = ReplayClock.start(first_sensor_time=100000, frame_interval_us=20000, now=10.0)
+    waits = []
+    sleeps = []
+
+    sleep_time = clock.sleep_until(
+        120000,
+        sleeps.append,
+        now=lambda: 10.005,
+        wait_for_stop=lambda timeout: waits.append(timeout) or True,
+    )
+
+    assert sleep_time == pytest.approx(0.015)
+    assert waits == [pytest.approx(0.015)]
+    assert sleeps == []
+
+
 def test_replay_clock_sleep_until_applies_replay_factor():
     clock = ReplayClock.start(
         first_sensor_time=100000,

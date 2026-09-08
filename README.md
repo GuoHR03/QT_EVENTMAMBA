@@ -26,7 +26,7 @@ UI_Event 是一个基于 PyQt6 的事件相机可视化与 EventMamba 推理工�
 
 RAW 是主要离线格式；H5/HDF5 和 AEDAT4 作为兼容输入保留。界面的“选择事件文件”按钮可以选择这三类离线格式。
 
-说明：RAW 和 AEDAT4 可以向底层 reader 转发主动停止；H5 会在当前读取或回放等待结束后响应停止，不保证立即唤醒。
+说明：RAW 和 AEDAT4 会向底层 reader 转发主动停止；H5/AEDAT4 的回放等待可由会话停止事件立即唤醒。H5 正在执行的单次数据集读取仍会在当前小批次结束后退出。
 
 ## 5 分钟快速开始
 
@@ -52,8 +52,8 @@ RAW 是主要离线格式；H5/HDF5 和 AEDAT4 作为兼容输入保留。界面
 
 项目采用两个独立 Python 环境，不能混用：
 
-- UI/Metavision 环境：发布构建固定使用 CPython 3.8 x64。
-- Windows 推理环境：当前验证环境为 Python 3.13，负责 ONNX Runtime GPU、NumPy、ZeroMQ 和 CUDA 运行依赖。
+- UI/Metavision 环境：发布构建固定使用 CPython 3.8.20 x64 和 Metavision SDK 4.6.2。
+- Windows 推理环境：固定使用 CPython 3.13.5，负责 ONNX Runtime GPU、NumPy、ZeroMQ 和 CUDA 运行依赖。
 
 如果两个环境和模型资产已经准备好，可在项目根目录运行：
 
@@ -63,9 +63,51 @@ RAW 是主要离线格式；H5/HDF5 和 AEDAT4 作为兼容输入保留。界面
 
 UI 基础依赖包括 PyQt6、pyzmq、NumPy 和 h5py；AEDAT4 兼容输入还需要单独安装 `dv_processing`。Windows 推理环境需要 ONNX Runtime GPU，以及与模型配套的 CUDA/cuDNN 运行库和自定义算子 DLL。
 
-当前源码仍有一个需要在发布前处理的兼容性限制：发布 UI 环境固定为 Python 3.8，但部分推理模块包含 Python 3.10 才支持的类型标注。因此不要把 UI 与推理依赖合并到同一个 Python 3.8 环境，也不要把“Python 3.8+”理解为所有源码模块都已在任意高版本上验证。
+两个环境的精确版本记录在 `runtime-contract.json`；可安装依赖分别位于
+`requirements/ui-py38.txt` 和 `requirements/backend-py313.txt`。CUDA/cuDNN
+Windows Wheel 由 `tools/install_onnx_cuda_runtime.ps1` 安装。发布构建开始前会
+校验解释器、关键包、Metavision SDK 版本和 CPython ABI，禁止混用两个环境。
 
 完整构建环境、资产准备和安装包验收流程见 [PACKAGING.md](PACKAGING.md)。
+
+### 本地开发与测试环境
+
+测试不使用全局 Anaconda，也不向两个正式运行环境安装 pytest/mypy。项目使用
+独立的 `.venv-dev`，它仍然是 CPython 3.13.5，因此项目的 Python 版本数量
+仍为两个：3.8.20 和 3.13.5。
+
+首次创建或修复开发环境：
+
+```powershell
+.\scripts\setup_dev.ps1
+```
+
+如果 `python` 没有指向 CPython 3.13.5，可显式传入解释器：
+
+```powershell
+.\scripts\setup_dev.ps1 -Python E:\Path\To\Python313\python.exe
+```
+
+统一运行测试、类型检查、PowerShell 语法检查、两个正式运行时契约、Metavision
+组件冒烟检查以及真实 MainWindow 离屏构造/关闭检查：
+
+```powershell
+.\scripts\check.ps1
+```
+
+`check.ps1` 会拒绝全局解释器或错误版本，并要求测试从 `.venv-dev` 执行。
+常规测试要求真实 PyQt6 可导入；仅在明确进行无 Qt 的纯逻辑诊断时，才可手动
+设置 `UI_EVENT_ALLOW_QT_STUBS=1` 使用测试桩。完整测试依赖契约位于
+`requirements/test-py313.txt`，本地开发和 CI 共用该文件。
+
+### 自动化检查
+
+GitHub Actions 会在每次 push 和 pull request 时运行两组无硬件检查：
+
+- Python 3.13.5：固定测试依赖契约、真实 PyQt6 导入、完整 pytest、mypy 和 PowerShell 构建脚本语法检查。
+- Python 3.8.20：UI 运行时契约检查、Metavision Python 扩展、事件渲染器、去噪组件，以及真实 MainWindow 离屏构造和协作式关闭测试。
+
+真实相机、NVIDIA GPU、自定义 CUDA 算子和最终安装包仍由本机发布流程验收；云端 CI 不替代这些硬件检查。
 
 ## 使用说明
 
@@ -174,13 +216,22 @@ UI 与推理后端使用 `eventmamba/v1` 协议：控制消息为受限 JSON，�
 .\scripts\build_installer.ps1 -Clean -SkipInstaller
 ```
 
+构建可直接复制到另一台电脑的便携 ZIP：
+
+```powershell
+.\scripts\build_installer.ps1 -Clean -SkipInstaller -PortableArchive
+```
+
 构建安装程序：
 
 ```powershell
 .\scripts\build_installer.ps1 -Clean
 ```
 
-安装包输出为 `installer/UI_Event_Setup.exe`。完整依赖、目录结构、资产验证和干净电脑验收项目见 [PACKAGING.md](PACKAGING.md)。
+安装包输出为 `installer/UI_Event_Setup.exe`；便携 ZIP 输出为
+`installer/UI_Event-<version>-windows-x64-portable.zip`，并在构建结束时打印
+SHA-256。完整依赖、目录结构、资产验证和干净电脑验收项目见
+[PACKAGING.md](PACKAGING.md)。
 
 ## 常见问题
 
@@ -188,14 +239,14 @@ UI 与推理后端使用 `eventmamba/v1` 协议：控制消息为受限 JSON，�
 - **无法打开 AEDAT4：**确认当前 UI 环境已安装 `dv_processing`。
 - **推理服务无法启动：**检查 GPU/驱动、两个 ONNX 模型、椭圆矩阵和自定义算子 DLL 是否齐全且来自同一构建版本。
 - **模型已启动但没有预测：**确认回放或相机正在产生事件，ROI 内事件数量足够，并检查去噪是否过强。
-- **H5 停止稍有延迟：**当前 H5 路径在读取或回放等待边界响应停止，不是底层可唤醒 reader。
+- **H5 停止稍有延迟：**回放计时等待可以立即唤醒，但已经进入 h5py 的单次数据集读取需要在当前小批次结束后退出。
 - **中文显示乱码：**源码和文档使用 UTF-8；PowerShell 可使用 `Get-Content -Encoding UTF8` 查看。
 
 安装版日志位于 `%LOCALAPPDATA%\UI_Event`。源码模式的后端日志默认为项目运行目录下的 `eventmamba_backend.log`。
 
 ## 开发者概览
 
-- `app/`：PyQt6 界面、用户操作、状态显示和预测叠加。
+- `app/`：PyQt6 界面、用户操作、状态显示和预测叠加；`MainWindow` 只负责装配与顶层 Qt 事件，布局、视口、相机/回放、推理和关闭流程由独立组件负责。行为组件通过显式端口接收所需控制器、控件和回调，不持有整个窗口对象。
 - `backend/`：输入源、事件管线、回放、录制、推理服务和通信协议。
 - `artifacts/`：正式 ONNX/矩阵资产及本地实验产物。
 - `native/selective_scan_ort/`：Windows ONNX Runtime 自定义算子。
@@ -203,7 +254,7 @@ UI 与推理后端使用 `eventmamba/v1` 协议：控制消息为受限 JSON，�
 - `tools/`：模型转换、等价验证、性能测试和诊断工具。
 - `tests/`：协议、输入源、播放、推理、UI 状态和打包逻辑测试。
 
-推理服务使用 nonce/PID 标识每次后端实例，WSL 停止流程只处理经过命令行 nonce 验证的 PID，不会扫描或广域终止其他任务。切源、Seek 和重启通过请求代际隔离旧画面与旧响应。
+相机、回放和推理服务共用线程安全的生命周期状态机：`stopped → starting → running → stopping → stopped`，异常统一进入 `failed`，并拒绝跳过启动或停止阶段的非法转换。应用关闭由阶段协调器按“UI/Qt 资源 → 推理后端 → 窗口退出”的顺序执行；失败时保留已完成阶段，用户重试关闭不会重复释放已有资源。推理服务使用 nonce/PID 标识每次后端实例，WSL 停止流程只处理经过命令行 nonce 验证的 PID，不会扫描或广域终止其他任务。切源、Seek 和重启通过请求代际隔离旧画面与旧响应。
 
 ## 文档导航
 
@@ -216,8 +267,8 @@ UI 与推理后端使用 `eventmamba/v1` 协议：控制消息为受限 JSON，�
 
 ## 当前验证与已知限制
 
-- 当前自动化测试：`384 passed`。
+- 完整自动化测试套件通过。
 - Windows 原生推理只验证了 NVIDIA/CUDA 路径，没有完整验证 CPU 回退。
 - 原生 DLL 当前构建目标为 CUDA 架构 7.5 和 8.6，其他 NVIDIA 架构需要额外验证或重新编译。
-- 发布 UI 固定使用 CPython 3.8 ABI，但部分源码推理模块仍含 Python 3.10+ 类型标注；正式重新打包前需要消除该兼容性问题。
+- 发布 UI 固定使用 CPython 3.8 ABI；Windows 推理源码和依赖只由独立的 CPython 3.13 后端加载。
 - H5/AEDAT4 属兼容输入；新格式或非标准字段布局应先做打开和时间轴验证。

@@ -334,6 +334,11 @@ def test_network_thread_is_created_and_destroyed_by_network_phase_caller(
 
 def test_network_stop_failure_keeps_live_thread_handle():
     class StuckNetworkThread:
+        cooperative_stop_timeout_ms = 25
+
+        def __init__(self):
+            self.interruption_requested = False
+
         def stop(self):
             pass
 
@@ -344,7 +349,10 @@ def test_network_stop_failure_keeps_live_thread_handle():
             return False
 
         def terminate(self):
-            pass
+            raise AssertionError("cooperative shutdown must not terminate QThread")
+
+        def requestInterruption(self):
+            self.interruption_requested = True
 
         def deleteLater(self):
             raise AssertionError("a live thread must not be deleted")
@@ -367,6 +375,7 @@ def test_network_stop_failure_keeps_live_thread_handle():
 
     assert service.network_thread is thread
     assert service.state == STATE_ERROR
+    assert thread.interruption_requested
 
 
 def test_restart_cancelled_while_stopping_never_starts_backend():

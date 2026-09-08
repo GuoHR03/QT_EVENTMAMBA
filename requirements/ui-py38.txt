@@ -1,0 +1,12 @@
+# Verified UI/Metavision release environment for CPython 3.8.20.
+# Metavision SDK 4.6.2 itself is supplied by the repository's libs/ tree.
+PyQt6==6.7.1
+PyQt6-Qt6==6.7.3
+PyQt6-sip==13.8.0
+numpy==1.24.4
+pyzmq==27.1.0
+opencv-python==4.13.0.90
+h5py==3.11.0
+dv-processing==2.0.3
+pyinstaller==6.19.0
+pyinstaller-hooks-contrib==2026.3

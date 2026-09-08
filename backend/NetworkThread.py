@@ -22,11 +22,15 @@ class NetworkThread(QThread):
     def __init__(self, input_queue, host="127.0.0.1", port=5555, request_timeout_ms=1000):
         super().__init__()
         self.input_queue = input_queue
-        self.running = True
         self.endpoint = f"tcp://{host}:{port}"
-        self.request_timeout_ms = request_timeout_ms
+        self.request_timeout_ms = max(1, int(request_timeout_ms))
+        self.cooperative_stop_timeout_ms = max(
+            1000,
+            min(5000, (self.request_timeout_ms * 2) + 500),
+        )
         self.context = None
         self.socket = None
+        self._stop_requested = Event()
         self._last_error = None
         self._generation = object()
         self._generation_lock = Lock()
@@ -39,7 +43,7 @@ class NetworkThread(QThread):
         self.context = zmq.Context()
         self._open_socket()
         try:
-            while self.running:
+            while not self._stop_requested.is_set():
                 if not self._generation_enabled.wait(timeout=0.2):
                     continue
                 data, request_generation = self._get_latest_payload_for_generation()
@@ -67,7 +71,7 @@ class NetworkThread(QThread):
                     )
                     self._reset_socket()
                 except zmq.ZMQError as exc:
-                    if self.running:
+                    if not self._stop_requested.is_set():
                         self._emit_error_once(
                             f"通信异常：{exc}",
                             timestamp,
@@ -75,7 +79,7 @@ class NetworkThread(QThread):
                         )
                         self._reset_socket()
                 except Exception as exc:
-                    if self.running:
+                    if not self._stop_requested.is_set():
                         self._emit_error_once(
                             f"响应解析异常：{exc}",
                             timestamp,
@@ -98,7 +102,7 @@ class NetworkThread(QThread):
         # Queue.get() may wait for 200 ms.  It must stay outside the lock used
         # by the UI thread's synchronous invalidate_generation() call.
         with self._generation_lock:
-            if not self.running or not self._generation_enabled.is_set():
+            if self._stop_requested.is_set() or not self._generation_enabled.is_set():
                 return None, None
             if self._priority_payload is not None:
                 data = self._priority_payload
@@ -112,7 +116,7 @@ class NetworkThread(QThread):
 
         with self._generation_lock:
             if (
-                not self.running
+                self._stop_requested.is_set()
                 or not self._generation_enabled.is_set()
                 or generation is not self._generation
             ):
@@ -200,13 +204,13 @@ class NetworkThread(QThread):
 
     def _reset_socket(self):
         self._close_socket()
-        if self.running:
+        if not self._stop_requested.is_set():
             self._open_socket()
 
     def _emit_result_if_current(self, result, timestamp, generation):
         with self._generation_lock:
             if (
-                not self.running
+                self._stop_requested.is_set()
                 or generation is not self._generation
                 or not self._generation_enabled.is_set()
             ):
@@ -218,7 +222,7 @@ class NetworkThread(QThread):
     def _emit_error_once(self, message, timestamp, generation):
         with self._generation_lock:
             if (
-                not self.running
+                self._stop_requested.is_set()
                 or generation is not self._generation
                 or not self._generation_enabled.is_set()
                 or message == self._last_error
@@ -229,5 +233,5 @@ class NetworkThread(QThread):
         return True
 
     def stop(self):
-        self.running = False
+        self._stop_requested.set()
         self._generation_enabled.set()

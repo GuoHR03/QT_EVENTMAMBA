@@ -109,6 +109,7 @@ class Aedat4Source(EventSource):
             fps_getter=context.fps_getter,
             start_time_us=self.seek_time_us,
             progress_callback=context.progress_callback,
+            wait_for_stop=getattr(context, "wait_for_stop", None),
         )
 
     def request_stop(self):
@@ -136,6 +137,7 @@ class H5Source(EventSource):
             fps_getter=context.fps_getter,
             start_time_us=self.seek_time_us,
             progress_callback=context.progress_callback,
+            wait_for_stop=getattr(context, "wait_for_stop", None),
         )
 
     def close(self):
@@ -162,7 +164,9 @@ class MetavisionSource(EventSource):
         )
 
     def request_stop(self):
-        return _request_resource_stop(self.iterator)
+        return _request_resource_stop(self.iterator) or _request_resource_stop(
+            self.device
+        )
 
 
 def _request_resource_stop(resource):
@@ -176,5 +180,10 @@ def _request_resource_stop(resource):
             method()
             return True
         except Exception:
-            return False
+            continue
+    for attribute_name in ("reader", "_reader"):
+        nested_resource = getattr(resource, attribute_name, None)
+        if nested_resource is not None and nested_resource is not resource:
+            if _request_resource_stop(nested_resource):
+                return True
     return False

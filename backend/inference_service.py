@@ -20,6 +20,7 @@ from backend.inference_lifecycle import (
     STATE_STARTING,
     STATE_STOPPED,
     STATE_STOPPING,
+    LifecycleStateMachine,
     validate_lifecycle_state,
 )
 from backend.inference_runtime import default_backend_log_path, runtime_root_dir, to_wsl_path
@@ -44,13 +45,15 @@ class InferenceService:
         self.prediction_signal = prediction_signal
         self.prediction_callback = prediction_callback
         self.network_thread = None
-        self._state = STATE_STOPPED
+        self._state_lock = threading.RLock()
         self._state_callback = state_callback
-        self.last_error = None
+        self._lifecycle = LifecycleStateMachine(
+            callback=state_callback,
+            lock=self._state_lock,
+        )
         self._instance_nonce = None
         self._startup_cancelled = threading.Event()
         self._cancel_latched = False
-        self._state_lock = threading.RLock()
         self._backend_operation_lock = threading.Lock()
         self._backend_operation = None
         self._backend_ready = False
@@ -81,8 +84,24 @@ class InferenceService:
 
     @property
     def state(self):
+        lifecycle = getattr(self, "_lifecycle", None)
+        if lifecycle is not None:
+            return lifecycle.state
         with self._state_lock:
             return self._state
+
+    @property
+    def last_error(self):
+        lifecycle = getattr(self, "_lifecycle", None)
+        if lifecycle is not None:
+            return lifecycle.last_error
+        return getattr(self, "_legacy_last_error", None)
+
+    @last_error.setter
+    def last_error(self, value):
+        # Compatibility for lightweight tests and embedders constructing the
+        # service with __new__ instead of __init__.
+        self._legacy_last_error = value
 
     def is_running(self):
         with self._state_lock:
@@ -309,7 +328,7 @@ class InferenceService:
     def cancel_start(self, force=False):
         with self._state_lock:
             cancellable = (
-                self._state == STATE_STARTING
+                self.state == STATE_STARTING
                 or self._backend_operation in ("start", "restart")
                 or bool(force)
             )
@@ -501,6 +520,17 @@ class InferenceService:
         raise error
 
     def _commit_network_running(self):
+        lifecycle = getattr(self, "_lifecycle", None)
+        if lifecycle is not None:
+            committed = lifecycle.transition_if(
+                STATE_RUNNING,
+                lambda: not self._startup_cancelled.is_set(),
+                on_transition=self._clear_start_cancellation,
+            )
+            if not committed:
+                raise StartupCancelledError()
+            return
+
         callback = None
         with self._state_lock:
             if self._startup_cancelled.is_set():
@@ -546,6 +576,10 @@ class InferenceService:
 
     def _set_state(self, state, error=None):
         validate_lifecycle_state(state)
+        lifecycle = getattr(self, "_lifecycle", None)
+        if lifecycle is not None:
+            lifecycle.transition(state, error=error)
+            return
         with self._state_lock:
             self._state = state
             self.last_error = str(error) if error else None

@@ -1,6 +1,15 @@
 import logging
 import queue
+from threading import RLock
 
+from backend.lifecycle import (
+    STATE_FAILED,
+    STATE_RUNNING,
+    STATE_STARTING,
+    STATE_STOPPED,
+    STATE_STOPPING,
+    LifecycleStateMachine,
+)
 from backend.playback_config import PlaybackConfig, PlaybackConfigController, playback_restart_required
 from backend.replay_clock import clamp_fraction
 from backend.source_metadata_service import SourceMetadataService
@@ -22,6 +31,7 @@ class CameraService:
         thread_factory=None,
         metadata_service=None,
         source_ready_callback=None,
+        state_callback=None,
     ):
         self.frame_queue = frame_queue
         self.image_signal = image_signal
@@ -31,6 +41,8 @@ class CameraService:
         self._thread_factory = thread_factory or _create_camera_thread
         self.metadata_service = metadata_service or SourceMetadataService()
         self._source_ready_callback = source_ready_callback
+        self._operation_lock = RLock()
+        self._lifecycle = LifecycleStateMachine(callback=state_callback)
         self.thread = None
         self._thread_image_handler = None
         self._thread_status_handler = None
@@ -50,6 +62,14 @@ class CameraService:
 
     def is_running(self):
         return self.thread is not None and self.thread.isRunning()
+
+    @property
+    def state(self):
+        return self._lifecycle.state
+
+    @property
+    def last_error(self):
+        return self._lifecycle.last_error
 
     @property
     def source_mode(self):
@@ -83,6 +103,10 @@ class CameraService:
         )
 
     def _switch_source(self, file_path, restart_if_running, config=None):
+        with self._operation_lock:
+            return self._switch_source_locked(file_path, restart_if_running, config)
+
+    def _switch_source_locked(self, file_path, restart_if_running, config=None):
         was_running = self.is_running()
         if self.thread is not None:
             self.stop(emit_finished=False)
@@ -111,8 +135,22 @@ class CameraService:
         seek_fraction=0.0,
         report_noise_filter_status=True,
     ):
+        with self._operation_lock:
+            return self._start_locked(
+                config=config,
+                seek_fraction=seek_fraction,
+                report_noise_filter_status=report_noise_filter_status,
+            )
+
+    def _start_locked(
+        self,
+        config=None,
+        seek_fraction=0.0,
+        report_noise_filter_status=True,
+    ):
         if self.thread is not None:
             self.stop(emit_finished=False)
+        self._set_state(STATE_STARTING)
         self._source_generation += 1
         config = config or self.config_controller.get()
         self.config_controller.set(config)
@@ -130,52 +168,57 @@ class CameraService:
         if self.file_path:
             kwargs["file_path"] = self.file_path
 
-        self.thread = self._thread_factory(**kwargs)
-        generation = self._source_generation
-        thread = self.thread
-        self._thread_image_handler = lambda image, timestamp: self._handle_image(
-            thread,
-            generation,
-            image,
-            timestamp,
-        )
-        self._thread_status_handler = lambda message: self._handle_status(
-            thread,
-            generation,
-            message,
-        )
-        self.thread.image_signal.connect(self._thread_image_handler)
-        self.thread.status_signal.connect(self._thread_status_handler)
-        finished_token = {"emit": True}
-        self._thread_finished_token = finished_token
-        self._thread_finished_handler = lambda: self._handle_finished(
-            thread,
-            generation,
-            finished_token,
-        )
-        self.thread.finished_signal.connect(self._thread_finished_handler)
-        self._thread_progress_handler = (
-            lambda current_us, total_us: self._handle_progress(
+        try:
+            self.thread = self._thread_factory(**kwargs)
+            generation = self._source_generation
+            thread = self.thread
+            self._thread_image_handler = lambda image, timestamp: self._handle_image(
                 thread,
                 generation,
-                current_us,
-                total_us,
+                image,
+                timestamp,
             )
-        )
-        self.thread.progress_signal.connect(self._thread_progress_handler)
-        source_ready_signal = getattr(self.thread, "source_ready_signal", None)
-        if source_ready_signal is not None:
-            self._thread_source_ready_handler = (
-                lambda width, height: self._handle_source_ready(
+            self._thread_status_handler = lambda message: self._handle_status(
+                thread,
+                generation,
+                message,
+            )
+            self.thread.image_signal.connect(self._thread_image_handler)
+            self.thread.status_signal.connect(self._thread_status_handler)
+            finished_token = {"emit": True}
+            self._thread_finished_token = finished_token
+            self._thread_finished_handler = lambda: self._handle_finished(
+                thread,
+                generation,
+                finished_token,
+            )
+            self.thread.finished_signal.connect(self._thread_finished_handler)
+            self._thread_progress_handler = (
+                lambda current_us, total_us: self._handle_progress(
                     thread,
                     generation,
-                    width,
-                    height,
+                    current_us,
+                    total_us,
                 )
             )
-            source_ready_signal.connect(self._thread_source_ready_handler)
-        self.thread.start()
-        self._ensure_raw_duration_scan()
+            self.thread.progress_signal.connect(self._thread_progress_handler)
+            source_ready_signal = getattr(self.thread, "source_ready_signal", None)
+            if source_ready_signal is not None:
+                self._thread_source_ready_handler = (
+                    lambda width, height: self._handle_source_ready(
+                        thread,
+                        generation,
+                        width,
+                        height,
+                    )
+                )
+                source_ready_signal.connect(self._thread_source_ready_handler)
+            self.thread.start()
+            self._set_state(STATE_RUNNING)
+            self._ensure_raw_duration_scan()
+        except Exception as exc:
+            self._set_state(STATE_FAILED, exc)
+            raise
 
     def restart(
         self,
@@ -183,38 +226,40 @@ class CameraService:
         seek_fraction=None,
         report_noise_filter_status=True,
     ):
-        config = config or self.config_controller.get()
-        seek_fraction = self.last_seek_fraction if seek_fraction is None else seek_fraction
-        self.stop(emit_finished=False)
-        self.start(
-            config=config,
-            seek_fraction=seek_fraction,
-            report_noise_filter_status=report_noise_filter_status,
-        )
+        with self._operation_lock:
+            config = config or self.config_controller.get()
+            seek_fraction = self.last_seek_fraction if seek_fraction is None else seek_fraction
+            self.stop(emit_finished=False)
+            self.start(
+                config=config,
+                seek_fraction=seek_fraction,
+                report_noise_filter_status=report_noise_filter_status,
+            )
 
     def seek(self, seek_fraction):
-        seek_fraction = clamp_fraction(seek_fraction)
-        config = self.config_controller.get()
-        if self.thread is not None:
-            self.stop(emit_finished=False)
-        self._source_generation += 1
-        self._source_ready = False
-        self.last_seek_fraction = seek_fraction
-        if self._last_progress_total_us > 0:
-            self._last_progress_current_us = int(
-                self._last_progress_total_us * seek_fraction
+        with self._operation_lock:
+            seek_fraction = clamp_fraction(seek_fraction)
+            config = self.config_controller.get()
+            if self.thread is not None:
+                self.stop(emit_finished=False)
+            self._source_generation += 1
+            self._source_ready = False
+            self.last_seek_fraction = seek_fraction
+            if self._last_progress_total_us > 0:
+                self._last_progress_current_us = int(
+                    self._last_progress_total_us * seek_fraction
+                )
+            else:
+                self._last_progress_current_us = 0
+            self.progress_signal.emit(
+                self._last_progress_current_us,
+                self._last_progress_total_us,
             )
-        else:
-            self._last_progress_current_us = 0
-        self.progress_signal.emit(
-            self._last_progress_current_us,
-            self._last_progress_total_us,
-        )
-        self.start(
-            config=config,
-            seek_fraction=seek_fraction,
-            report_noise_filter_status=False,
-        )
+            self.start(
+                config=config,
+                seek_fraction=seek_fraction,
+                report_noise_filter_status=False,
+            )
 
     def apply_config(self, config):
         current = self.config_controller.get()
@@ -238,9 +283,16 @@ class CameraService:
         return changed
 
     def stop(self, emit_finished=True):
+        with self._operation_lock:
+            return self._stop_locked(emit_finished=emit_finished)
+
+    def _stop_locked(self, emit_finished=True):
         if not self.thread:
             self._clear_frame_queue()
+            self._set_state(STATE_STOPPED)
             return
+
+        self._set_state(STATE_STOPPING)
 
         if bool(getattr(self.thread, "is_recording", False)):
             try:
@@ -279,16 +331,24 @@ class CameraService:
                 pass
 
         self.thread.stop()
-        if not self.thread.wait(2000):
-            LOGGER.warning("Camera thread did not stop cooperatively within 2 seconds")
-            self.thread.requestInterruption()
-            if not self.thread.wait(1000):
-                LOGGER.error("Camera thread still running; using forced termination as a last resort")
-                self.thread.terminate()
-                if not self.thread.wait(500):
-                    raise RuntimeError(
-                        "Camera thread could not be stopped; source switch aborted"
-                    )
+        request_interruption = getattr(self.thread, "requestInterruption", None)
+        if callable(request_interruption):
+            request_interruption()
+        stop_timeout_ms = max(
+            1,
+            int(getattr(self.thread, "cooperative_stop_timeout_ms", 3000)),
+        )
+        if not self.thread.wait(stop_timeout_ms):
+            LOGGER.error(
+                "Camera thread did not stop cooperatively within %.1f seconds; "
+                "the live handle is retained for a safe retry",
+                stop_timeout_ms / 1000.0,
+            )
+            error = RuntimeError(
+                "Camera thread did not stop cooperatively; source switch aborted"
+            )
+            self._set_state(STATE_FAILED, error)
+            raise error
 
         self.thread.deleteLater()
         self.thread = None
@@ -300,6 +360,7 @@ class CameraService:
         self._thread_source_ready_handler = None
         self._source_ready = False
         self._clear_frame_queue()
+        self._set_state(STATE_STOPPED)
 
     def start_recording(self):
         if self.source_mode != SOURCE_MODE_LIVE or not self.is_running():
@@ -361,7 +422,11 @@ class CameraService:
             return
         if generation != self._source_generation:
             return
+        self._set_state(STATE_STOPPED)
         self.finished_signal.emit()
+
+    def _set_state(self, state, error=None):
+        self._lifecycle.transition(state, error=error)
 
     def _ensure_raw_duration_scan(self):
         generation = self._source_generation

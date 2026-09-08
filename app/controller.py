@@ -12,6 +12,14 @@ class AppController:
     def is_camera_running(self):
         return self.backend.is_camera_running()
 
+    @property
+    def camera_state(self):
+        return self.backend.camera_state
+
+    @property
+    def camera_last_error(self):
+        return self.backend.camera_last_error
+
     def is_recording(self):
         return self.backend.is_recording()
 

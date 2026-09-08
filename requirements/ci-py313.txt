@@ -1,0 +1,2 @@
+# CI uses the same dependency contract as the local .venv-dev environment.
+-r test-py313.txt

@@ -6,6 +6,8 @@ from backend.playback_coordinator import PlaybackCoordinator
 class CameraThread(QThread):
     """Qt thread and signal adapter for PlaybackCoordinator."""
 
+    cooperative_stop_timeout_ms = 3000
+
     image_signal = pyqtSignal(object, int)
     status_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()

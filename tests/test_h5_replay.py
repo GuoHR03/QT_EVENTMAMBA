@@ -224,6 +224,40 @@ def test_run_h5_replay_loop_honors_stop_callback():
     assert emitted == []
 
 
+def test_run_h5_replay_loop_stop_wait_interrupts_replay_delay():
+    dataset = np.array(
+        [
+            (1, 1, 100000, 1),
+            (2, 2, 110000, 1),
+            (3, 3, 130000, 0),
+        ],
+        dtype=[("x", "<u2"), ("y", "<u2"), ("timestamp", "<i8"), ("polarity", "i1")],
+    )
+    running = [True]
+    emitted = []
+    waits = []
+
+    def wait_for_stop(timeout):
+        waits.append(timeout)
+        running[0] = False
+        return True
+
+    run_h5_replay_loop(
+        events_dataset=dataset,
+        dtype_names=dataset.dtype.names,
+        fps=50,
+        is_running=lambda: running[0],
+        handle_frame_events=lambda events: emitted.append(events.copy()),
+        now=lambda: 0.0,
+        sleep=lambda _duration: pytest.fail("blocking sleep must not be used"),
+        wait_for_stop=wait_for_stop,
+        step=2,
+    )
+
+    assert len(emitted) == 1
+    assert waits == [pytest.approx(0.04)]
+
+
 def test_run_h5_replay_loop_starts_from_target_time_and_reports_progress():
     dataset = np.array(
         [

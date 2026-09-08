@@ -1,6 +1,10 @@
+from dataclasses import replace
 from types import SimpleNamespace
 
-from app.inference_operation_coordinator import InferenceOperationCoordinator
+from app.inference_operation_coordinator import (
+    InferenceOperationCoordinator,
+    InferenceUiPorts,
+)
 from app.inference_operation_state import (
     INFERENCE_CLOSE,
     INFERENCE_START,
@@ -39,10 +43,14 @@ class FakeController:
         self.inference_last_error = None
         self.inference_runtime_display_name = "Test Runtime"
         self.active_model_path = "model.onnx"
+        self.weights_path = "model.onnx"
         self.network_starts = 0
         self.network_stops = 0
         self.fail_network_start = False
         self.unload_calls = 0
+        self.load_calls = 0
+        self.restart_calls = 0
+        self.selected_weights = None
 
     def start_model_network(self):
         self.network_starts += 1
@@ -55,6 +63,15 @@ class FakeController:
 
     def unload_model(self):
         self.unload_calls += 1
+
+    def load_model(self):
+        self.load_calls += 1
+
+    def restart_model(self):
+        self.restart_calls += 1
+
+    def set_weights_path(self, path):
+        self.selected_weights = path
 
     def is_inference_running(self):
         return self.inference_state == "running"
@@ -73,6 +90,7 @@ class FakeViewState:
 class FakeWindow:
     def __init__(self):
         self.controller = FakeController()
+        self.settings = SimpleNamespace(prediction_mode="center")
         self.view_state = FakeViewState()
         self.predictions = SimpleNamespace(clear=lambda: None)
         self.logs = []
@@ -103,8 +121,25 @@ class FakeWindow:
 def _coordinator(window=None, deferred=None):
     window = window or FakeWindow()
     deferred = [] if deferred is None else deferred
+    ports = InferenceUiPorts(
+        parent=window,
+        controller=window.controller,
+        view_state=window.view_state,
+        predictions=window.predictions,
+        settings=window.settings,
+        append_log=window.append_log,
+        set_prediction_mode_controls_enabled=(
+            window._set_prediction_mode_controls_enabled
+        ),
+        set_window_enabled=window.setEnabled,
+        start_health_timer=window._inference_health_timer.start,
+        begin_close_cleanup=window._begin_close_cleanup,
+        complete_close=window._complete_close,
+        choose_weights_file=lambda: None,
+        shutdown=getattr(window, "shutdown", None),
+    )
     coordinator = InferenceOperationCoordinator(
-        window,
+        ports,
         worker_factory=FakeWorker,
         defer=deferred.append,
     )
@@ -126,6 +161,31 @@ def test_coordinator_starts_worker_and_commits_network_success():
     assert ("set_model_running", ()) in window.view_state.calls
     assert worker.deleted
     assert window.mode_control_states[-1] is True
+
+
+def test_high_level_model_start_is_owned_by_inference_coordinator():
+    coordinator, window, _deferred = _coordinator()
+
+    assert coordinator.load_model()
+
+    assert window.controller.network_stops == 1
+    assert coordinator.state.operation_name == INFERENCE_START
+    assert ("set_model_starting", ()) in window.view_state.calls
+    assert any("正在启动 Test Runtime" in message for message, _level in window.logs)
+
+
+def test_model_picker_uses_explicit_port_without_main_window_access():
+    coordinator, window, _deferred = _coordinator()
+    coordinator.ports = replace(
+        coordinator.ports,
+        choose_weights_file=lambda: "selected.onnx",
+    )
+
+    coordinator.select_weight_file()
+
+    assert not hasattr(coordinator, "window")
+    assert window.controller.selected_weights == "selected.onnx"
+    assert ("set_weight_file", ("selected.onnx",)) in window.view_state.calls
 
 
 def test_network_start_failure_schedules_backend_cleanup_after_finish():

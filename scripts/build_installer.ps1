@@ -1,6 +1,7 @@
 param(
     [switch]$Clean,
-    [switch]$SkipInstaller
+    [switch]$SkipInstaller,
+    [switch]$PortableArchive
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,7 +10,10 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptRoot
 Set-Location $ProjectRoot
 
-$ReleaseVersion = "0.2.0"
+$RuntimeContract = Join-Path $ProjectRoot "runtime-contract.json"
+$RuntimeValidator = Join-Path $ProjectRoot "tools\validate_runtime_contract.py"
+$Contract = Get-Content -LiteralPath $RuntimeContract -Raw | ConvertFrom-Json
+$ReleaseVersion = $Contract.project_version
 $UiPython = Join-Path $ProjectRoot ".qtcreator\Pythonvenv\Scripts\python.exe"
 $BackendPython = Join-Path $ProjectRoot ".venv-onnx-win\Scripts\python.exe"
 $UiSpec = Join-Path $ProjectRoot "UI_Event.spec"
@@ -20,6 +24,10 @@ $DistRoot = Join-Path $ProjectRoot "dist"
 $UiBundleDir = Join-Path $DistRoot "UI_Event"
 $BackendBundleDir = Join-Path $DistRoot "UI_Event_Backend"
 $BackendRuntimeDir = Join-Path $UiBundleDir "backend_runtime"
+$InstallerOutputDir = Join-Path $ProjectRoot "installer"
+$PortableArchivePath = Join-Path `
+    $InstallerOutputDir `
+    "UI_Event-$ReleaseVersion-windows-x64-portable.zip"
 $ArtifactSourceDir = Join-Path $ProjectRoot "artifacts"
 $NativeDllSource = Join-Path $ProjectRoot "native\selective_scan_ort\bin\eventmamba_selective_scan.dll"
 $ArtifactValidator = Join-Path $ProjectRoot "tools\validate_windows_inference_artifacts.py"
@@ -136,6 +144,28 @@ function Assert-PyInstaller {
     & $Python -c "import PyInstaller" 2>$null
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller is not installed in $EnvironmentName. Install it with: `"$Python`" -m pip install pyinstaller"
+    }
+}
+
+function Assert-RuntimeContract {
+    param(
+        [string]$Python,
+        [string]$Role,
+        [string]$SdkRoot
+    )
+
+    Write-Host "==> Validating $Role runtime contract"
+    $arguments = @(
+        $RuntimeValidator,
+        "--contract", $RuntimeContract,
+        "--role", $Role
+    )
+    if ($SdkRoot) {
+        $arguments += @("--sdk-root", $SdkRoot)
+    }
+    & $Python @arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Role runtime does not match runtime-contract.json"
     }
 }
 
@@ -291,6 +321,8 @@ Assert-FileExists $BackendPython "Windows inference Python interpreter"
 Assert-FileExists $UiSpec "UI PyInstaller spec"
 Assert-FileExists $BackendSpec "Windows backend PyInstaller spec"
 Assert-FileExists $InstallerScript "Inno Setup script"
+Assert-FileExists $RuntimeContract "Runtime contract"
+Assert-FileExists $RuntimeValidator "Runtime contract validator"
 Assert-FileExists $ArtifactValidator "Inference artifact validator"
 Assert-FileExists $NativeFpsProbe "Native FPS probe"
 $expectedInstallerVersion = "#define MyAppVersion `"$ReleaseVersion`""
@@ -299,6 +331,13 @@ if (-not (Select-String `
     -SimpleMatch $expectedInstallerVersion `
     -Quiet)) {
     throw "Release version mismatch: installer.iss must contain $expectedInstallerVersion"
+}
+$expectedProjectVersion = "version = `"$ReleaseVersion`""
+if (-not (Select-String `
+    -LiteralPath (Join-Path $ProjectRoot "pyproject.toml") `
+    -SimpleMatch $expectedProjectVersion `
+    -Quiet)) {
+    throw "Release version mismatch: pyproject.toml must contain $expectedProjectVersion"
 }
 foreach ($artifactName in $ArtifactNames) {
     Assert-FileExists (Join-Path $ArtifactSourceDir $artifactName) "Inference artifact"
@@ -317,6 +356,8 @@ Write-Host "==> UI Python: $UiPython"
 Write-Host "==> Backend Python: $BackendPython"
 Write-Host "==> Metavision SDK: $MetavisionSdkRoot"
 
+Assert-RuntimeContract $UiPython "ui" $MetavisionSdkRoot
+Assert-RuntimeContract $BackendPython "windows_backend"
 Assert-PyInstaller $UiPython "UI environment"
 Assert-PyInstaller $BackendPython "Windows inference environment"
 
@@ -461,6 +502,24 @@ Invoke-PackagedBackendSmoke `
 
 Write-Host "==> Portable bundle ready: $UiBundleDir"
 
+if ($PortableArchive) {
+    Write-Host "==> Creating portable archive: $PortableArchivePath"
+    if (-not (Test-Path -LiteralPath $InstallerOutputDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $InstallerOutputDir | Out-Null
+    }
+    Compress-Archive `
+        -LiteralPath $UiBundleDir `
+        -DestinationPath $PortableArchivePath `
+        -CompressionLevel Optimal `
+        -Force
+    Assert-FileExists $PortableArchivePath "Portable archive"
+    $archiveHash = (Get-FileHash `
+        -LiteralPath $PortableArchivePath `
+        -Algorithm SHA256).Hash
+    Write-Host "==> Portable archive ready: $PortableArchivePath"
+    Write-Host "==> Portable archive SHA256: $archiveHash"
+}
+
 if ($SkipInstaller) {
     Write-Host "==> Skipping installer build because -SkipInstaller was provided"
     exit 0
@@ -477,7 +536,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup build failed"
 }
 
-$setupPath = Join-Path $ProjectRoot "installer\UI_Event_Setup.exe"
+$setupPath = Join-Path $InstallerOutputDir "UI_Event_Setup.exe"
 Assert-FileExists $setupPath "Setup installer"
 
 Write-Host "==> Installer ready: $setupPath"

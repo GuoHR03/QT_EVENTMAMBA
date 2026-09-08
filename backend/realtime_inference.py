@@ -1,7 +1,5 @@
 import logging
 
-import torch
-
 from backend.inference_request import process_inference_request
 from backend.model_assets import MODE_CENTER, MODE_ELLIPSE
 from backend.predictor_registry import PredictorRegistry, PredictorSpec
@@ -17,6 +15,13 @@ _LEGACY_PREDICTOR_EXPORTS = {
     "EllipsePredictor",
     "inplace_relu",
 }
+
+
+def _default_torch_device():
+    """Import the optional WSL/PyTorch dependency only when it is required."""
+    import torch
+
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def create_default_predictor_registry():
@@ -59,7 +64,7 @@ class EventMambaPredictor:
         self.device = (
             device
             if device is not None
-            else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            else _default_torch_device()
         )
         self.predictor = None
         self.load_message = ""

@@ -1,0 +1,11 @@
+# Verified Windows ONNX/CUDA backend environment for CPython 3.13.5.
+# Install the pinned NVIDIA runtime wheels afterwards with:
+#   .\tools\install_onnx_cuda_runtime.ps1
+onnxruntime-gpu==1.27.0
+onnx==1.22.0
+numpy==2.5.1
+pyzmq==27.1.0
+flatbuffers==25.12.19
+protobuf==7.35.1
+pyinstaller==6.19.0
+pyinstaller-hooks-contrib==2026.6

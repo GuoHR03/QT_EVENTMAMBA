@@ -18,6 +18,7 @@ def run_h5_replay_loop(
     fps_getter=None,
     start_time_us=0,
     progress_callback=None,
+    wait_for_stop=None,
     step=5000,
 ):
     total_events = len(events_dataset)
@@ -29,7 +30,7 @@ def run_h5_replay_loop(
     while is_running() and current_idx < total_events:
         events_for_this_frame = []
 
-        while current_idx < total_events:
+        while is_running() and current_idx < total_events:
             end_idx = min(current_idx + step, total_events)
             raw_events = events_dataset[current_idx:end_idx]
             events = h5_events_to_event_cd(raw_events, time_key, pol_key)
@@ -53,7 +54,7 @@ def run_h5_replay_loop(
             events_for_this_frame.append(frame_part)
             current_idx = end_idx
 
-        if not events_for_this_frame:
+        if not is_running() or not events_for_this_frame:
             break
 
         frame_events = np.concatenate(events_for_this_frame)
@@ -71,6 +72,7 @@ def run_h5_replay_loop(
             reset_sensor_time=current_frame_boundary,
             replay_factor_getter=replay_factor_getter,
             factor_reset_sensor_time=current_frame_boundary,
+            wait_for_stop=wait_for_stop,
         )
 
 

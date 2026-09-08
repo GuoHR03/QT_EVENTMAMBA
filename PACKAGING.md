@@ -1,8 +1,8 @@
 # Windows 打包与安装说明
 
-最近正式版本为 `0.2.0`；当前主分支还包含尚未发布的推理生命周期、严格
-ZeroMQ 协议和 native-FPS 打包改动，详见 [CHANGELOG.md](CHANGELOG.md) 的
-`Unreleased`。默认发布链路完全运行在 Windows 上，不需要 WSL，也不要求
+最近正式版本为 `0.2.1`，包含推理生命周期、严格 ZeroMQ 协议和 native-FPS
+打包改动，详见 [CHANGELOG.md](CHANGELOG.md)。默认发布链路完全运行在
+Windows 上，不需要 WSL，也不要求
 目标电脑安装 Python。
 
 发布包采用两个独立的 PyInstaller `onedir` 程序：
@@ -28,8 +28,8 @@ ZeroMQ 协议和 native-FPS 打包改动，详见 [CHANGELOG.md](CHANGELOG.md) �
 需要准备：
 
 - Windows 10/11 x64。
-- `.qtcreator/Pythonvenv/Scripts/python.exe`（Python 3.8 x64），已安装 UI 运行依赖和 PyInstaller；正式包中的 Metavision 原生扩展固定为 CPython 3.8 ABI。
-- `.venv-onnx-win/Scripts/python.exe`（当前验证为 Python 3.13），已安装 ONNX/CUDA 后端依赖和 PyInstaller。
+- `.qtcreator/Pythonvenv/Scripts/python.exe`（Python 3.8.20 x64），已按 `requirements/ui-py38.txt` 安装 UI 运行依赖；正式包中的 Metavision 原生扩展固定为 CPython 3.8 ABI。
+- `.venv-onnx-win/Scripts/python.exe`（Python 3.13.5），已按 `requirements/backend-py313.txt` 安装 ONNX/CUDA 后端依赖，并通过 CUDA 运行库安装脚本补齐 NVIDIA Wheel。
 - Inno Setup 6；如果 `ISCC.exe` 不在常见安装目录或 `PATH` 中，可设置 `ISCC` 环境变量。
 - 项目 `libs/` 中的 Metavision Runtime。构建脚本优先读取 `METAVISION_SDK_PATH`，未设置时优先使用项目内运行库；运行库不完整时才回退到 `E:\Metavision\Prophesee`。
 - 下列正式推理文件：
@@ -47,9 +47,11 @@ native/selective_scan_ort/bin/eventmamba_selective_scan.dll
 Python 环境外，还需要 Visual Studio 2022 C++ 工具链、CMake、Ninja、CUDA
 Toolkit 12.2 和 ONNX Runtime 1.27 开发头文件。
 
-当前 `tools/build_selective_scan_ort.ps1` 仍按本机环境写死了 Visual Studio
-工具路径 `E:\VS\...`。在干净电脑执行前必须修改脚本或将这些路径参数化；
-因此原生算子重建目前不是完全可移植的一键流程。
+`tools/build_selective_scan_ort.ps1` 会通过 `vswhere.exe`、`PATH`、Visual
+Studio自带工具目录和 `CUDA_PATH_V12_2` 自动寻找构建工具。可以先执行
+`.\tools\build_selective_scan_ort.ps1 -ResolveOnly` 查看最终路径而不产生构建
+输出；非标准安装可通过 `-VsInstallPath`、`-CMakePath`、`-NinjaPath`、
+`-CudaRoot` 和 `-OrtIncludeDir` 显式覆盖。
 
 模型与 DLL 必须来自同一套原生 FPS 契约。重建顺序为：
 
@@ -71,19 +73,30 @@ Toolkit 12.2 和 ONNX Runtime 1.27 开发头文件。
 输出。安装包构建还会自动执行静态资产校验和 CPU 原生 FPS 算子探针，防止
 新模型与旧 DLL 混装。
 
-如环境中尚未安装 PyInstaller，分别执行：
+创建或恢复两个发布环境时，分别执行：
 
 ```powershell
-.\.qtcreator\Pythonvenv\Scripts\python.exe -m pip install pyinstaller
-.\.venv-onnx-win\Scripts\python.exe -m pip install pyinstaller
+.\.qtcreator\Pythonvenv\Scripts\python.exe -m pip install -r requirements\ui-py38.txt
+.\.venv-onnx-win\Scripts\python.exe -m pip install -r requirements\backend-py313.txt
+.\tools\install_onnx_cuda_runtime.ps1
 ```
 
 两个环境不能互换：UI 环境负责 PyQt6 和 Metavision，后端环境负责 ONNX Runtime GPU、NumPy、ZeroMQ、CUDA 与 cuDNN 运行依赖。
 
-仓库目前没有完整锁定两个环境的依赖版本，也没有独立的 Windows 后端
-requirements 文件。首次从零搭建环境时，应以已验证构建机导出的依赖清单为
-准；在补齐锁文件前，不应把 `pip install -r requirements.txt` 视为完整发布
-环境。AEDAT4 输入还需要额外安装 `dv_processing`。
+`runtime-contract.json` 是发布运行时的机器可读契约，记录两个解释器、关键
+Python 分发包、Metavision SDK/ABI 以及原生算子的 ORT/CUDA 构建契约。
+`requirements.txt` 保留为 UI 依赖入口；Windows 后端必须使用独立清单。
+可在不打包的情况下单独检查环境：
+
+```powershell
+.\.qtcreator\Pythonvenv\Scripts\python.exe tools\validate_runtime_contract.py `
+  --role ui --sdk-root libs
+.\.venv-onnx-win\Scripts\python.exe tools\validate_runtime_contract.py `
+  --role windows_backend
+```
+
+`scripts/build_installer.ps1` 会在 PyInstaller 启动前自动运行相同检查，任何
+解释器、关键依赖、SDK 版本或 CPython 扩展漂移都会使发布构建立即失败。
 
 自定义算子当前直接依赖 CUDA 12 的 `cudart64_12.dll`。后端 spec 会从 `CUDA_PATH_V12_2` 或标准 CUDA 12.2 安装目录收集该 DLL；构建脚本也会在生成安装器前检查后端冻结目录中确实存在它。
 
@@ -122,6 +135,15 @@ installer/UI_Event_Setup.exe
 ```powershell
 .\scripts\build_installer.ps1 -Clean -SkipInstaller
 ```
+
+同时生成适合上传到 GitHub Releases 的便携 ZIP：
+
+```powershell
+.\scripts\build_installer.ps1 -Clean -SkipInstaller -PortableArchive
+```
+
+ZIP 输出为 `installer/UI_Event-<version>-windows-x64-portable.zip`，构建脚本会
+在结束时打印文件的 SHA-256，便于下载后核验。
 
 输出目录为：
 
@@ -189,7 +211,7 @@ dist/UI_Event/
 
 ## WSL 源码兼容
 
-0.2.0 安装器不再携带 `wsl/eventmamba.tar`，也不会安装、启用或导入 WSL。默认安装包始终使用 `backend_runtime/UI_Event_Backend.exe`。
+0.2.1 安装器不再携带 `wsl/eventmamba.tar`，也不会安装、启用或导入 WSL。默认安装包始终使用 `backend_runtime/UI_Event_Backend.exe`。
 
 源码运行方式仍保留原 WSL 兼容后端。需要对照旧 PyTorch/Mamba 链路时，可在自行准备好 WSL2 和 `EventMamba_mini` 环境后设置：
 

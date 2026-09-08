@@ -1,5 +1,2 @@
-PyQt6
-pyzmq
-numpy
-opencv-python
-h5py
+# Backward-compatible entry point for the UI environment.
+-r requirements/ui-py38.txt
