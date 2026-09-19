@@ -454,9 +454,7 @@ class InferenceService:
             project_dir,
             instance_nonce=instance_nonce,
         )
-        expected_pid = None
-        if self.runtime_kind == "windows":
-            expected_pid = getattr(process, "pid", None)
+        expected_pid = _expected_ready_pid(process, self.runtime_kind)
         try:
             identity = wait_for_backend_ready_with_log(
                 host=host,
@@ -605,6 +603,24 @@ class InferenceService:
 
     def _default_backend_log_path(self):
         return default_backend_log_path(self._runtime_root_dir())
+
+
+def _expected_ready_pid(process, runtime_kind, frozen=None):
+    """Return a stable PID only when the launched process is the server.
+
+    In source mode, ``Scripts/python.exe`` is a Windows virtual-environment
+    launcher. Its PID differs from the base Python process that owns the ZMQ
+    server, so readiness is bound by the per-launch random nonce instead.
+    A frozen backend executable owns the server directly and can also be
+    checked by PID.
+    """
+    if runtime_kind != "windows":
+        return None
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    if not frozen:
+        return None
+    return getattr(process, "pid", None)
 
 
 def _finite_positive_timeout(value, default):

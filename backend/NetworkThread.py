@@ -6,6 +6,11 @@ import zmq
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from backend.protocol import LOCAL_ROI_CONTEXT
+from backend.settings import (
+    DEFAULT_INFERENCE_HOST,
+    DEFAULT_INFERENCE_PORT,
+    DEFAULT_NETWORK_TIMEOUT_MS,
+)
 from backend.zmq_protocol import (
     configure_socket_limits,
     receive_response,
@@ -17,9 +22,15 @@ class NetworkThread(QThread):
     # Keep the opaque generation token on the local Qt hop.  The UI boundary
     # performs a second check, so a reply that was already queued when a
     # camera/ROI transition starts cannot repopulate stale predictions.
-    result_signal = pyqtSignal(object, int, object)
+    result_signal = pyqtSignal(object, "qint64", object)
 
-    def __init__(self, input_queue, host="127.0.0.1", port=5555, request_timeout_ms=1000):
+    def __init__(
+        self,
+        input_queue,
+        host=DEFAULT_INFERENCE_HOST,
+        port=DEFAULT_INFERENCE_PORT,
+        request_timeout_ms=DEFAULT_NETWORK_TIMEOUT_MS,
+    ):
         super().__init__()
         self.input_queue = input_queue
         self.endpoint = f"tcp://{host}:{port}"

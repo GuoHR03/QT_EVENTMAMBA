@@ -1,6 +1,7 @@
 import argparse
 
 from backend.inference_server import ZmqInferenceServer
+from backend.settings import DEFAULT_INFERENCE_HOST, DEFAULT_INFERENCE_PORT
 from backend.windows_onnx_predictor import WindowsOnnxPredictorRuntime
 
 
@@ -12,7 +13,7 @@ class WindowsInferenceServer(ZmqInferenceServer):
         ellipse_matrix,
         custom_op_library,
         initial_mode="center",
-        port=5555,
+        port=DEFAULT_INFERENCE_PORT,
         instance_nonce=None,
     ):
         model = WindowsOnnxPredictorRuntime(
@@ -25,7 +26,7 @@ class WindowsInferenceServer(ZmqInferenceServer):
         super().__init__(
             model,
             port,
-            "127.0.0.1",
+            DEFAULT_INFERENCE_HOST,
             ready_messages=(
                 model.load_message,
                 f"Windows ONNX inference server ready on port {port}",
@@ -46,7 +47,7 @@ def main():
         choices=("center", "ellipse"),
         default="center",
     )
-    parser.add_argument("--port", type=int, default=5555)
+    parser.add_argument("--port", type=int, default=DEFAULT_INFERENCE_PORT)
     parser.add_argument("--instance-nonce")
     args = parser.parse_args()
     server = WindowsInferenceServer(

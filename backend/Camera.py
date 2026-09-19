@@ -8,7 +8,9 @@ class CameraThread(QThread):
 
     cooperative_stop_timeout_ms = 3000
 
-    image_signal = pyqtSignal(object, int)
+    # AEDAT4 recordings can carry epoch-based microsecond timestamps, which
+    # exceed Qt's 32-bit ``int`` range (INI30 is around 1.65e15).
+    image_signal = pyqtSignal(object, "qint64")
     status_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
     progress_signal = pyqtSignal(int, int)

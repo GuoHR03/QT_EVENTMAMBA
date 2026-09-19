@@ -1,5 +1,7 @@
+import time
+
 from PyQt6 import uic
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import (
     QColor,
     QTextCharFormat,
@@ -12,9 +14,10 @@ from PyQt6.QtWidgets import (
 )
 
 from backend.event_processing import normalize_roi
+from backend.playback_config import PlaybackConfig
 
 from .bootstrap import app_resource_path
-from .camera_ui_coordinator import CameraUiCoordinator, CameraUiPorts
+from .camera_ui_coordinator import CameraUiCoordinator, CameraUiPorts, REPLAY_SPEEDS
 from .controller import AppController
 from .event_viewport_presenter import EventViewportPorts, EventViewportPresenter
 from .file_dialogs import choose_input_file, choose_weights_file
@@ -26,6 +29,7 @@ from .inference_operation_state import (
     INFERENCE_CLOSE,
     InferenceOperationState,
 )
+from .ini30_ground_truth import Ini30GroundTruthOverlay
 from .log_formatter import (
     backend_message,
     mode_display_name,
@@ -33,29 +37,50 @@ from .log_formatter import (
     roi_settings_message,
 )
 from .main_window_layout import MainWindowLayoutMixin
+from .paths import default_checkpoint_dir, default_onnx_model_dir, default_record_dir
+from .performance_metrics import PerformanceMetrics
 from .playback_progress import PlaybackProgressState
+from .preferences import PreferenceStore, UiPreferences
 from .prediction_state import PredictionState
 from .settings import AppSettings
 from .shutdown_coordinator import ApplicationShutdownCoordinator
 from .theme import apply_app_theme
-from .ui_log import log_level_for_message
+from .ui_log import PredictionLogThrottle, log_level_for_message
 from .ui_status import source_display_name
 from .view_state import MainViewState, source_is_file
 
 
 class MainWindow(MainWindowLayoutMixin, QWidget):
-    def __init__(self):
+    def __init__(self, preference_store=None):
         super().__init__()
         uic.loadUi(app_resource_path("form.ui"), self)
-        self.settings = AppSettings()
+        self.preference_store = preference_store or PreferenceStore()
+        self.saved_preferences = self.preference_store.load()
+        self.settings = AppSettings(
+            prediction_mode=self.saved_preferences.prediction_mode,
+            playback_config=PlaybackConfig(
+                palette=self.saved_preferences.palette,
+                fps=self.saved_preferences.fps,
+                replay_factor=REPLAY_SPEEDS[self.saved_preferences.replay_speed],
+                noise_filter_type=self.saved_preferences.noise_filter_type,
+                noise_filter_threshold_us=(
+                    self.saved_preferences.noise_filter_threshold_us
+                ),
+            ),
+        )
         self._init_workspace_ui()
         apply_app_theme(self)
-        self._set_initial_window_geometry()
+        if not self.preference_store.restore_window_geometry(self):
+            self._set_initial_window_geometry()
 
         self.controller = AppController(self.settings)
+        self.ini30_ground_truth = Ini30GroundTruthOverlay()
+        self._weight_file_display_name = None
         self._configure_inference_runtime_ui()
         self.view_state = MainViewState(self)
         self.predictions = PredictionState(interval_ms=20)
+        self.prediction_log_throttle = PredictionLogThrottle(interval_s=1.0)
+        self.performance_metrics = PerformanceMetrics(window_s=5.0)
         self.playback_progress = PlaybackProgressState()
         self.inference_operations = InferenceOperationState()
         self.viewport_presenter = EventViewportPresenter(
@@ -70,6 +95,7 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
                 playback_progress_widget=self.playback_progress_widget,
                 input_file_label=self.input_file_label,
                 set_status_chip=self._set_status_chip,
+                frame_overlays=(self.ini30_ground_truth,),
             )
         )
         self.camera_ui = CameraUiCoordinator(
@@ -84,7 +110,7 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
                 camera_image_label=self.camera_image_label,
                 playback_progress_slider=self.playback_progress_slider,
                 playback_time_label=self.playback_time_label,
-                choose_input_file=lambda: choose_input_file(self),
+                choose_input_file=self._choose_input_file,
                 process_events=QApplication.processEvents,
             )
         )
@@ -112,16 +138,17 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
                 start_health_timer=self._inference_health_timer.start,
                 begin_close_cleanup=self._begin_close_cleanup,
                 complete_close=self._complete_close,
-                choose_weights_file=lambda: choose_weights_file(
-                    self,
-                    runtime_kind=self.controller.inference_runtime_kind,
-                ),
+                choose_weights_file=self._choose_weights_file,
                 shutdown=self.shutdown,
             ),
             state=self.inference_operations,
         )
         self._inference_health_timer.timeout.connect(self._refresh_inference_state)
         self._inference_health_timer.start()
+        self._performance_timer = QTimer(self)
+        self._performance_timer.setInterval(5000)
+        self._performance_timer.timeout.connect(self._report_performance)
+        self._performance_timer.start()
 
     def _configure_inference_runtime_ui(self):
         runtime_name = self.controller.inference_runtime_display_name
@@ -143,6 +170,12 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
         self.start_camera_button.clicked.connect(self.toggle_camera)
         self.record_button.clicked.connect(self.toggle_recording)
         self.roi_settings_editor.settings_confirmed.connect(self.on_settings_confirmed)
+        self.roi_settings_editor.center_radioButton.toggled.connect(
+            lambda checked: checked and self._on_prediction_mode_selected("center")
+        )
+        self.roi_settings_editor.eli_radioButton.toggled.connect(
+            lambda checked: checked and self._on_prediction_mode_selected("ellipse")
+        )
         self.roi_settings_editor.noise_filter_combo_box.currentTextChanged.connect(
             self._update_noise_threshold_enabled
         )
@@ -155,6 +188,7 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
         self.restart_model_button.clicked.connect(self.restart_eventmamba)
         self.live_camera_button.clicked.connect(self.select_live_camera)
         self.select_input_file_button.clicked.connect(self.select_input_file)
+        self.ground_truth_button.toggled.connect(self._toggle_ground_truth)
         self.playback_progress_slider.sliderPressed.connect(self._begin_progress_drag)
         self.playback_progress_slider.sliderMoved.connect(self._preview_progress_drag)
         self.playback_progress_slider.sliderReleased.connect(self._finish_progress_drag)
@@ -171,7 +205,25 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
 
     def _init_view_state(self):
         self.log_text_edit.document().setMaximumBlockCount(500)
-        self.replay_speed_combo_box.setCurrentText("1x")
+        for control in (
+            self.palette_combo_box,
+            self.fps_spin_box,
+            self.replay_speed_combo_box,
+        ):
+            control.blockSignals(True)
+        try:
+            self.palette_combo_box.setCurrentText(self.saved_preferences.palette)
+            self.fps_spin_box.setValue(self.saved_preferences.fps)
+            self.replay_speed_combo_box.setCurrentText(
+                self.saved_preferences.replay_speed
+            )
+        finally:
+            for control in (
+                self.palette_combo_box,
+                self.fps_spin_box,
+                self.replay_speed_combo_box,
+            ):
+                control.blockSignals(False)
         self.weight_path_label.setToolTip(self.weight_path_label.text())
         self.input_file_label.setToolTip(self.input_file_label.text())
         self.view_state.set_live_camera()
@@ -186,6 +238,10 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
         self._reset_playback_progress()
         self._update_noise_threshold_enabled(
             self.roi_settings_editor.noise_filter_combo_box.currentText()
+        )
+        self._set_log_panel_collapsed(self.saved_preferences.log_collapsed)
+        self._set_control_panel_visible(
+            self.saved_preferences.settings_panel_visible
         )
 
     def _update_noise_threshold_enabled(self, filter_name):
@@ -218,6 +274,12 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
 
     def set_source_status(self, file_path):
         self.viewport_presenter.reset_frame_size()
+        ground_truth_available = self.ini30_ground_truth.configure_source(file_path)
+        self.ground_truth_button.blockSignals(True)
+        self.ground_truth_button.setChecked(False)
+        self.ground_truth_button.blockSignals(False)
+        self.ground_truth_button.setEnabled(ground_truth_available)
+        self.ground_truth_button.setText("绘制 Ground Truth 椭圆")
         self._apply_source_mode()
         if not source_is_file(self.controller):
             self.viewport_presenter.set_input_file_display_name("实时相机")
@@ -241,6 +303,16 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
             "info",
         )
 
+    def _toggle_ground_truth(self, enabled):
+        active = self.ini30_ground_truth.set_enabled(enabled)
+        if bool(enabled) != active:
+            self.ground_truth_button.blockSignals(True)
+            self.ground_truth_button.setChecked(active)
+            self.ground_truth_button.blockSignals(False)
+        self.ground_truth_button.setText(
+            "Ground Truth 椭圆：开" if active else "绘制 Ground Truth 椭圆"
+        )
+
     @staticmethod
     def _set_status_chip(label, text, state):
         label.setText(str(text))
@@ -249,7 +321,10 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
         label.style().polish(label)
 
     def _toggle_log_panel(self):
-        self._log_collapsed = not self._log_collapsed
+        self._set_log_panel_collapsed(not self._log_collapsed)
+
+    def _set_log_panel_collapsed(self, collapsed):
+        self._log_collapsed = bool(collapsed)
         self.log_text_edit.setVisible(not self._log_collapsed)
         self.log_toggle_button.setText("展开" if self._log_collapsed else "收起")
         if self._log_collapsed:
@@ -273,14 +348,22 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
         return self.camera_ui.toggle_recording()
 
     def _display_image_with_prediction(self, cv_img, img_timestamp):
-        return self.viewport_presenter.display_image(cv_img, img_timestamp)
+        started = time.perf_counter()
+        try:
+            return self.viewport_presenter.display_image(cv_img, img_timestamp)
+        finally:
+            self.performance_metrics.record_frame(time.perf_counter() - started)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "camera_viewport_widget"):
             QTimer.singleShot(0, self._fit_event_view)
+        if hasattr(self, "control_panel_scroll_area"):
+            QTimer.singleShot(0, self._sync_control_panel_content_width)
         if hasattr(self, "input_file_label"):
             QTimer.singleShot(0, self._elide_input_file_name)
+        if hasattr(self, "weight_path_label"):
+            QTimer.singleShot(0, self._elide_weight_file_name)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -291,15 +374,45 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
     def _elide_input_file_name(self):
         return self.viewport_presenter.elide_input_file_name()
 
+    def set_weight_file_display_path(self, file_path):
+        normalized_path = str(file_path or "").replace("\\", "/")
+        self._weight_file_display_name = normalized_path.rsplit("/", 1)[-1]
+        self.weight_path_label.setToolTip(
+            f"完整文件名：{self._weight_file_display_name}\n完整路径：{file_path}"
+        )
+        QTimer.singleShot(0, self._elide_weight_file_name)
+
+    def _elide_weight_file_name(self):
+        if not self._weight_file_display_name:
+            return
+        available_width = max(
+            40,
+            self.weight_path_label.contentsRect().width() - 16,
+        )
+        display_text = self.weight_path_label.fontMetrics().elidedText(
+            self._weight_file_display_name,
+            Qt.TextElideMode.ElideMiddle,
+            available_width,
+        )
+        self.weight_path_label.setText(display_text)
+
     def _fit_event_view(self):
         return self.viewport_presenter.fit()
 
     def _buffer_prediction_result(self, result, pred_timestamp):
-        self.append_log(backend_message(result))
+        self.performance_metrics.record_prediction()
+        if self.prediction_log_throttle.should_log(result):
+            self.append_log(backend_message(result))
         self.predictions.add_result(result, pred_timestamp, self.settings.prediction_mode)
+
+    def _report_performance(self):
+        snapshot = self.performance_metrics.snapshot()
+        if snapshot.has_activity:
+            self.append_log(snapshot.format_log(), "info")
 
     def closeEvent(self, event):
         if self.shutdown.ready:
+            self._save_preferences()
             event.accept()
             return
 
@@ -307,6 +420,7 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
         if self.shutdown.begin():
             self.setEnabled(False)
             self._inference_health_timer.stop()
+            self._performance_timer.stop()
 
         if self._inference_operation_is_running():
             worker = self.inference_operations.worker
@@ -335,6 +449,7 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
             self.shutdown.abort()
             self.setEnabled(True)
             self._inference_health_timer.start()
+            self._performance_timer.start()
             self.view_state.set_model_error()
             return
 
@@ -352,6 +467,7 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
                 self.shutdown.abort("无法启动关闭清理任务")
                 self.setEnabled(True)
                 self._inference_health_timer.start()
+                self._performance_timer.start()
                 self.view_state.set_model_error()
 
     def _complete_close(self):
@@ -378,6 +494,46 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
 
     def select_input_file(self):
         return self.camera_ui.select_input_file()
+
+    def _choose_input_file(self):
+        file_path = choose_input_file(
+            self,
+            initial_dir=self.preference_store.last_input_directory(
+                default_record_dir()
+            ),
+        )
+        self.preference_store.remember_input_file(file_path)
+        return file_path
+
+    def _choose_weights_file(self):
+        runtime_kind = self.controller.inference_runtime_kind
+        fallback = (
+            default_onnx_model_dir()
+            if runtime_kind == "windows"
+            else default_checkpoint_dir()
+        )
+        file_path = choose_weights_file(
+            self,
+            runtime_kind=runtime_kind,
+            initial_dir=self.preference_store.last_model_directory(fallback),
+        )
+        self.preference_store.remember_model_file(file_path)
+        return file_path
+
+    def _save_preferences(self):
+        self.camera_ui.sync_capture_settings()
+        preferences = UiPreferences(
+            palette=self.camera_ui.selected_palette(),
+            fps=self.fps_spin_box.value(),
+            replay_speed=self.replay_speed_combo_box.currentText(),
+            prediction_mode=self.settings.prediction_mode,
+            noise_filter_type=self.settings.noise_filter_type,
+            noise_filter_threshold_us=self.settings.noise_filter_threshold_us,
+            log_collapsed=self._log_collapsed,
+            settings_panel_visible=self.control_panel_scroll_area.isVisible(),
+        )
+        self.preference_store.save(preferences)
+        self.preference_store.save_window_geometry(self)
 
     def _refresh_camera_view_state(self):
         return self.camera_ui.refresh_camera_view_state()
@@ -424,6 +580,15 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
 
     def _refresh_inference_state(self):
         return self.inference_operation_coordinator.refresh_runtime_state()
+
+    def _on_prediction_mode_selected(self, mode):
+        if not self.controller.apply_prediction_mode(mode):
+            return
+        self.predictions.clear()
+        self._set_status_chip(self.mode_status_label, mode_display_name(mode), "info")
+        self.append_log(f"预测模式已切换为：{mode_display_name(mode)}", "info")
+        if self.controller.is_inference_running():
+            self.restart_eventmamba()
 
     def on_settings_confirmed(self, roi, mode, filter_type, threshold_us):
         frame_size = self.viewport_presenter.frame_size

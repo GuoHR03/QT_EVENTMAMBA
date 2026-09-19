@@ -97,7 +97,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--legacy-center",
-        default="artifacts/eventmamba_center_selective_scan_cuda.onnx",
+        default="artifacts/sources/eventmamba_center_selective_scan_cuda.onnx",
     )
     parser.add_argument(
         "--native-center",
@@ -105,7 +105,7 @@ def main():
     )
     parser.add_argument(
         "--legacy-ellipse",
-        default="artifacts/eventmamba_ellipse_selective_scan_cuda.onnx",
+        default="artifacts/sources/eventmamba_ellipse_selective_scan_cuda.onnx",
     )
     parser.add_argument(
         "--native-ellipse",
@@ -115,7 +115,7 @@ def main():
         "--custom-op-library",
         default="native/selective_scan_ort/bin/eventmamba_selective_scan.dll",
     )
-    parser.add_argument("--sample", default="artifacts/real_raw_sample.npz")
+    parser.add_argument("--sample", default="artifacts/experimental/real_raw_sample.npz")
     parser.add_argument("--synthetic-cases", type=int, default=3)
     parser.add_argument("--seed", type=int, default=7)
     args = parser.parse_args()

@@ -103,7 +103,7 @@ def main():
     reference_error = torch.max(torch.abs(fast_output - reference_output)).item()
     print(f"[1/3] fused/reference max error={reference_error:.9g}", flush=True)
 
-    output = PROJECT_ROOT / "artifacts" / "mamba_block_reference.onnx"
+    output = PROJECT_ROOT / "artifacts" / "experimental" / "mamba_block_reference.onnx"
     output.parent.mkdir(parents=True, exist_ok=True)
     print("[2/3] exporting reference BiMamba block", flush=True)
     scripted_reference = torch.jit.script(reference_block)

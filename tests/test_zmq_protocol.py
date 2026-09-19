@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from backend import zmq_protocol as wire
+from backend.settings import DEFAULT_INFERENCE_HOST
 
 
 _PICKLE_TRIPWIRE = {"executed": False}
@@ -364,4 +365,5 @@ def test_linux_backend_does_not_bind_inference_to_all_interfaces():
     source = (project_root / "linux_backend.py").read_text(encoding="utf-8-sig")
 
     assert "0.0.0.0" not in source
-    assert '"127.0.0.1"' in source
+    assert "DEFAULT_INFERENCE_HOST" in source
+    assert DEFAULT_INFERENCE_HOST == "127.0.0.1"

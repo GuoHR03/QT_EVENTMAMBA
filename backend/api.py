@@ -7,15 +7,16 @@ from backend.camera_service import CameraService
 from backend.inference_service import InferenceService
 from backend.inference_session_coordinator import InferenceSessionCoordinator
 from backend.model_contract import MODE_CENTER
+from backend.settings import DEFAULT_INFERENCE_HOST, DEFAULT_INFERENCE_PORT
 
 LOGGER = logging.getLogger(__name__)
 
 
 class BackendAPI(QObject):
-    image_signal = pyqtSignal(object, int)
+    image_signal = pyqtSignal(object, "qint64")
     camera_status_signal = pyqtSignal(str)
-    prediction_signal = pyqtSignal(object, int)
-    _network_result_signal = pyqtSignal(object, int, object)
+    prediction_signal = pyqtSignal(object, "qint64")
+    _network_result_signal = pyqtSignal(object, "qint64", object)
     playback_finished_signal = pyqtSignal()
     playback_progress_signal = pyqtSignal(int, int)
 
@@ -169,7 +170,12 @@ class BackendAPI(QObject):
     def stop_recording(self):
         return self.camera.stop_recording()
 
-    def start_eventmamba(self, weights_path, port=5555, host="127.0.0.1"):
+    def start_eventmamba(
+        self,
+        weights_path,
+        port=DEFAULT_INFERENCE_PORT,
+        host=DEFAULT_INFERENCE_HOST,
+    ):
         """Compatibility wrapper; UI code should use the two split phases."""
         self.start_eventmamba_backend(weights_path, port=port, host=host)
         try:
@@ -178,7 +184,11 @@ class BackendAPI(QObject):
             self.stop_eventmamba_backend()
             raise
 
-    def restart_eventmamba(self, port=5555, host="127.0.0.1"):
+    def restart_eventmamba(
+        self,
+        port=DEFAULT_INFERENCE_PORT,
+        host=DEFAULT_INFERENCE_HOST,
+    ):
         """Compatibility wrapper; UI code should use the three split phases."""
         self.stop_eventmamba_network()
         try:
@@ -206,8 +216,8 @@ class BackendAPI(QObject):
     def start_eventmamba_backend(
         self,
         weights_path,
-        port=5555,
-        host="127.0.0.1",
+        port=DEFAULT_INFERENCE_PORT,
+        host=DEFAULT_INFERENCE_HOST,
     ):
         # Model loading can take seconds.  Keep the camera's display path live,
         # but do not slice or normalize inference windows until the verified
@@ -220,7 +230,11 @@ class BackendAPI(QObject):
             host=host,
         )
 
-    def start_eventmamba_network(self, port=5555, host="127.0.0.1"):
+    def start_eventmamba_network(
+        self,
+        port=DEFAULT_INFERENCE_PORT,
+        host=DEFAULT_INFERENCE_HOST,
+    ):
         # NetworkThread is a QObject and must be created by the UI thread.
         # Start it paused so CONFIG is always the first request for a source.
         self.camera.set_analysis_enabled(False)
@@ -260,7 +274,11 @@ class BackendAPI(QObject):
         self.camera.set_analysis_enabled(False)
         return self.inference.stop_backend()
 
-    def restart_eventmamba_backend(self, port=5555, host="127.0.0.1"):
+    def restart_eventmamba_backend(
+        self,
+        port=DEFAULT_INFERENCE_PORT,
+        host=DEFAULT_INFERENCE_HOST,
+    ):
         self.camera.set_analysis_enabled(False)
         return self.inference.restart_backend(
             self.prediction_mode,

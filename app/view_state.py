@@ -120,6 +120,14 @@ class MainViewState:
             set_source_status(file_path)
 
     def set_weight_file(self, file_path):
+        set_weight_file_display_path = getattr(
+            self.view,
+            "set_weight_file_display_path",
+            None,
+        )
+        if callable(set_weight_file_display_path):
+            set_weight_file_display_path(file_path)
+            return
         self.view.weight_path_label.setText(os.path.basename(file_path))
         self.view.weight_path_label.setToolTip(file_path)
 

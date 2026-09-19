@@ -148,7 +148,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("center", "ellipse"), default="center")
     parser.add_argument("--weights", required=True)
-    parser.add_argument("--output", default="artifacts/eventmamba_poc.onnx")
+    parser.add_argument("--output", default="artifacts/experimental/eventmamba_poc.onnx")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--opset", type=int, default=18)
     parser.add_argument("--seed", type=int, default=7)

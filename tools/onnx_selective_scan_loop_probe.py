@@ -71,7 +71,7 @@ def main():
     scripted_output = scripted(*inputs)
     scripted_error = torch.max(torch.abs(expected - scripted_output)).item()
 
-    output = PROJECT_ROOT / "artifacts" / "selective_scan_loop.onnx"
+    output = PROJECT_ROOT / "artifacts" / "experimental" / "selective_scan_loop.onnx"
     output.parent.mkdir(parents=True, exist_ok=True)
     names = ["u", "delta", "A", "B", "C", "D", "z", "delta_bias"]
     torch.onnx.export(

@@ -149,7 +149,7 @@ class MainWindowLayoutMixin:
         # Height is updated explicitly when accordion sections change. Keep
         # horizontal sizing flexible so long file names cannot widen the
         # scroll area's content beyond its viewport.
-        self.control_panel_layout.setSizeConstraint(QLayout.SizeConstraint.SetDefaultConstraint)
+        self.control_panel_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         panel_index = self.content_horizontal_layout.indexOf(self.control_panel_widget)
         self.content_horizontal_layout.removeWidget(self.control_panel_widget)
         self.control_panel_scroll_area = QScrollArea(self)
@@ -185,6 +185,16 @@ class MainWindowLayoutMixin:
         self.live_camera_button.setToolTip("切换到已连接的实时事件相机")
         self.select_input_file_button.setToolTip(
             "选择 RAW、H5/HDF5 或 AEDAT4 事件文件"
+        )
+        self.ground_truth_button = QPushButton(
+            "绘制 Ground Truth 椭圆",
+            self.control_panel_widget,
+        )
+        self.ground_truth_button.setObjectName("ground_truth_button")
+        self.ground_truth_button.setCheckable(True)
+        self.ground_truth_button.setEnabled(False)
+        self.ground_truth_button.setToolTip(
+            "仅当所选 INI30 events.aedat4 旁存在 annotations.csv 时可用"
         )
         self.fps_spin_box.setToolTip(
             "控制画面帧率和每帧事件累计时间，不影响模型的 20 ms 推理窗口"
@@ -223,6 +233,7 @@ class MainWindowLayoutMixin:
             self.select_input_file_button,
             self.replay_speed_combo_box,
             self.start_camera_button,
+            self.ground_truth_button,
             self.record_button,
             self.weight_path_label,
             self.runtime_name_label,
@@ -249,6 +260,12 @@ class MainWindowLayoutMixin:
             QSizePolicy.Policy.Ignored,
             QSizePolicy.Policy.Fixed,
         )
+        # Long model filenames must not contribute their full size hint to the
+        # scroll area's content width. The visible text is elided by MainWindow.
+        self.weight_path_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Fixed,
+        )
 
         self.source_group_box = QGroupBox(self.control_panel_widget)
         source_layout = QVBoxLayout(self.source_group_box)
@@ -271,6 +288,7 @@ class MainWindowLayoutMixin:
         playback_layout.addWidget(self.fps_text_label, 1, 0)
         playback_layout.addWidget(self.fps_spin_box, 1, 1)
         playback_layout.addWidget(self.start_camera_button, 2, 0, 1, 2)
+        playback_layout.addWidget(self.ground_truth_button, 3, 0, 1, 2)
         playback_layout.setColumnStretch(1, 1)
 
         self.recording_group_box = QGroupBox(self.control_panel_widget)
@@ -433,6 +451,21 @@ class MainWindowLayoutMixin:
             self.control_panel_layout.sizeHint().height()
         )
         self.control_panel_widget.updateGeometry()
+        # Hidden accordion contents retain placeholder geometry. Re-elide only
+        # after the newly expanded section has completed its layout pass.
+        QTimer.singleShot(0, self._sync_control_panel_content_width)
+        QTimer.singleShot(0, self._elide_input_file_name)
+        QTimer.singleShot(0, self._elide_weight_file_name)
+
+    def _sync_control_panel_content_width(self):
+        """Keep accordion content inside the scroll area's real viewport."""
+        if not self.control_panel_scroll_area.isVisible():
+            return
+        viewport_width = self.control_panel_scroll_area.viewport().width()
+        if viewport_width < 200:
+            return
+        if self.control_panel_widget.width() != viewport_width:
+            self.control_panel_widget.setFixedWidth(viewport_width)
 
     def _apply_source_mode(self):
         """Apply all live-versus-file visibility from one source of truth."""
@@ -451,6 +484,7 @@ class MainWindowLayoutMixin:
             self.replay_speed_combo_box,
             self.playback_progress_slider,
             self.playback_time_label,
+            self.ground_truth_button,
         ):
             widget.setVisible(file_mode)
 
@@ -543,7 +577,7 @@ class MainWindowLayoutMixin:
         )
 
         self.content_horizontal_layout.activate()
+        QTimer.singleShot(0, self._sync_control_panel_content_width)
         QTimer.singleShot(0, self._fit_event_view)
         QTimer.singleShot(0, self._elide_input_file_name)
-
-
+        QTimer.singleShot(0, self._elide_weight_file_name)

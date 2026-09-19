@@ -33,11 +33,12 @@ wsl/*/
 artifacts/*.onnx
 artifacts/*.npz
 artifacts/*.npy
-!artifacts/eventmamba_center_selective_scan_cuda.onnx
-!artifacts/eventmamba_ellipse_selective_scan_cuda.onnx
+artifacts/experimental/
 !artifacts/eventmamba_center_native_fps.onnx
 !artifacts/eventmamba_ellipse_native_fps.onnx
 !artifacts/eventmamba_ellipse_matrix_A.npy
+!artifacts/sources/
+!artifacts/sources/*.onnx
 .venv-onnx-win/
 .venv-dev/
 .onnx-wheel-cache/

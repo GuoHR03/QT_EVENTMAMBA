@@ -112,6 +112,7 @@ def run_case(dll, rng, case, repeats):
     model_path = (
         PROJECT_ROOT
         / "artifacts"
+        / "experimental"
         / f"selective_scan_custom_{channels}x{length}x{state_size}.onnx"
     )
     model_path.parent.mkdir(parents=True, exist_ok=True)

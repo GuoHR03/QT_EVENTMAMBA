@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.controller import AppController
+from app.settings import AppSettings
 
 
 class FakeBackend:
@@ -17,6 +18,7 @@ class FakeBackend:
         self.restart_calls = 0
         self.cancel_start_calls = 0
         self.lifecycle_calls = []
+        self.prediction_modes = []
 
     def is_camera_running(self):
         return self.running
@@ -69,6 +71,9 @@ class FakeBackend:
         self.cancel_start_calls += 1
         return True
 
+    def set_prediction_mode(self, mode):
+        self.prediction_modes.append(mode)
+
 
 def _controller(backend=None):
     controller = AppController.__new__(AppController)
@@ -87,6 +92,17 @@ def test_controller_accepts_an_injected_backend():
 
     assert controller.backend is backend
     assert controller.settings is settings
+
+
+def test_prediction_mode_applies_immediately_and_reports_changes():
+    backend = FakeBackend()
+    settings = AppSettings()
+    controller = AppController(settings, backend=backend)
+
+    assert controller.apply_prediction_mode("ellipse") is True
+    assert controller.apply_prediction_mode("ellipse") is False
+    assert settings.prediction_mode == "ellipse"
+    assert backend.prediction_modes == ["ellipse", "ellipse"]
 
 
 def test_set_input_file_accepts_raw_and_propagates_restart_state():

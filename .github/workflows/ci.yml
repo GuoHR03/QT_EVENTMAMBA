@@ -41,6 +41,8 @@ jobs:
       - name: Validate test dependency contract and real Qt
         run: |
           python tools/validate_runtime_contract.py --role test
+          python tools/validate_source_text.py
+          python tools/validate_asset_manifest.py
           python -c "from PyQt6 import QtCore; print('Qt mode: real; PyQt6=' + QtCore.PYQT_VERSION_STR)"
 
       - name: Run test suite

@@ -145,8 +145,8 @@ events [B,3,1024] + fps_starts [B,3]
 资产分为三类：
 
 - **正式运行资产**：两个 `*_native_fps.onnx`、椭圆 `matrix_A.npy` 和 Custom Op DLL，均由版本控制保留并进入安装包。
-- **可复现源资产**：两个 `*_selective_scan_cuda.onnx`，由版本控制保留，用于重新插入原生三级 FPS。
-- **本地实验资产**：其他实验模型、NPZ、日志、构建目录、依赖头文件和运行库缓存，默认忽略。
+- **可复现源资产**：`artifacts/sources/` 中的两个 `*_selective_scan_cuda.onnx`，由版本控制保留，用于重新插入原生三级 FPS。
+- **本地实验资产**：其他实验模型、NPZ 和日志统一放在 `artifacts/experimental/`，默认忽略且不进入安装包。
 
 ## 后续工作
 

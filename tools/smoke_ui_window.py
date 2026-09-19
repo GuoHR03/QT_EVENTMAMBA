@@ -3,6 +3,7 @@
 import argparse
 import os
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -19,14 +20,22 @@ def run_smoke_test(timeout_ms=15000):
 
     configure_runtime(str(PROJECT_ROOT / "main.py"))
 
-    from PyQt6.QtCore import QTimer
+    from PyQt6.QtCore import QSettings, QTimer
     from PyQt6.QtWidgets import QApplication
 
+    from app.preferences import PreferenceStore
     from app.widget import MainWindow
 
     application = QApplication.instance() or QApplication([])
     application.setQuitOnLastWindowClosed(True)
-    window = MainWindow()
+    preference_directory = tempfile.TemporaryDirectory()
+    preference_settings = QSettings(
+        str(Path(preference_directory.name) / "preferences.ini"),
+        QSettings.Format.IniFormat,
+    )
+    window = MainWindow(
+        preference_store=PreferenceStore(preference_settings),
+    )
     window.show()
 
     timed_out = [False]
@@ -66,6 +75,7 @@ def run_smoke_test(timeout_ms=15000):
         print("Inference backend remained active after close", file=sys.stderr)
         return 6
 
+    preference_directory.cleanup()
     print("Real Qt MainWindow smoke test passed", flush=True)
     return 0
 

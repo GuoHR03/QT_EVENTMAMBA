@@ -16,6 +16,10 @@ Windows 上，不需要 WSL，也不要求
 
 ## 构建环境
 
+整个源码工作区共有三个虚拟环境、两个 Python 版本；本章只使用其中两个正式
+发布环境。`.venv-dev` 是独立的 Python 3.13.5 开发测试环境，不参与 PyInstaller
+或安装包构建。
+
 发布工作分成两条路径：
 
 1. **使用仓库中已有的正式资产打包**：适合日常生成便携目录或安装程序，
@@ -39,7 +43,11 @@ artifacts/eventmamba_center_native_fps.onnx
 artifacts/eventmamba_ellipse_native_fps.onnx
 artifacts/eventmamba_ellipse_matrix_A.npy
 native/selective_scan_ort/bin/eventmamba_selective_scan.dll
+artifacts/manifest.json
 ```
+
+构建开始时会验证 `manifest.json` 中全部运行资产和生成源资产的大小与 SHA-256；
+最终安装包只携带运行资产和清单，不携带 `artifacts/sources/`。
 
 ### 重新生成模型和自定义算子
 
@@ -58,11 +66,11 @@ Studio自带工具目录和 `CUDA_PATH_V12_2` 自动寻找构建工具。可以�
 ```powershell
 .\tools\build_selective_scan_ort.ps1
 .\.venv-onnx-win\Scripts\python.exe tools\onnx_insert_hierarchical_fps.py `
-  --input artifacts\eventmamba_center_selective_scan_cuda.onnx `
+  --input artifacts\sources\eventmamba_center_selective_scan_cuda.onnx `
   --output artifacts\eventmamba_center_native_fps.onnx `
   --overwrite
 .\.venv-onnx-win\Scripts\python.exe tools\onnx_insert_hierarchical_fps.py `
-  --input artifacts\eventmamba_ellipse_selective_scan_cuda.onnx `
+  --input artifacts\sources\eventmamba_ellipse_selective_scan_cuda.onnx `
   --output artifacts\eventmamba_ellipse_native_fps.onnx `
   --overwrite
 .\.venv-onnx-win\Scripts\python.exe tools\validate_windows_inference_artifacts.py
@@ -160,7 +168,8 @@ dist/UI_Event/
 ├── artifacts/
 │   ├── eventmamba_center_native_fps.onnx
 │   ├── eventmamba_ellipse_native_fps.onnx
-│   └── eventmamba_ellipse_matrix_A.npy
+│   ├── eventmamba_ellipse_matrix_A.npy
+│   └── manifest.json
 ├── metavision/
 │   ├── third_party/bin/
 │   ├── lib/hdf5/plugin/

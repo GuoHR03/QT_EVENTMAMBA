@@ -60,6 +60,18 @@ def test_default_backend_log_path_prefers_localappdata():
     assert log_path == os.path.join(r"C:\Users\me\AppData\Local", "UI_Event", "eventmamba_backend.log")
 
 
+def test_default_backend_log_path_honors_explicit_log_directory():
+    log_path = default_backend_log_path(
+        runtime_root=r"C:\Project",
+        environ={
+            "UI_EVENT_LOG_DIR": r"D:\UI Event Logs",
+            "LOCALAPPDATA": r"C:\Users\me\AppData\Local",
+        },
+    )
+
+    assert log_path == os.path.join(r"D:\UI Event Logs", "eventmamba_backend.log")
+
+
 def test_decode_backend_log_handles_utf8_utf16_and_gbk():
     assert decode_backend_log("ready".encode("utf-8")) == "ready"
     assert decode_backend_log("ready".encode("utf-16")) == "ready"

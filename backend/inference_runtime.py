@@ -42,6 +42,9 @@ def runtime_root_dir(module_file, frozen=None, meipass=None, executable=None):
 
 def default_backend_log_path(runtime_root, environ=None):
     environ = environ if environ is not None else os.environ
+    configured_log_dir = environ.get("UI_EVENT_LOG_DIR")
+    if configured_log_dir:
+        return os.path.join(configured_log_dir, "eventmamba_backend.log")
     preferred_root = environ.get("LOCALAPPDATA") or environ.get("TEMP") or runtime_root
     log_dir = os.path.join(preferred_root, "UI_Event")
     return os.path.join(log_dir, "eventmamba_backend.log")

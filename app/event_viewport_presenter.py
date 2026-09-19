@@ -23,6 +23,7 @@ class EventViewportPorts:
     playback_progress_widget: Any
     input_file_label: Any
     set_status_chip: Callable[[Any, str, str], None]
+    frame_overlays: tuple = ()
 
 
 class EventViewportPresenter:
@@ -71,6 +72,8 @@ class EventViewportPresenter:
                 height,
                 ports.settings.roi,
             )
+        for overlay in ports.frame_overlays:
+            overlay.draw(q_img, img_timestamp, width, height)
 
         pixmap = QPixmap.fromImage(q_img)
         ports.camera_image_label.setPixmap(

@@ -147,8 +147,7 @@ class AppController:
     def apply_settings(self, roi, mode, filter_type, threshold_us):
         previous = self.settings.playback_config
 
-        self.settings.update_prediction(mode)
-        self.backend.set_prediction_mode(mode)
+        self.apply_prediction_mode(mode)
         self.settings.update_noise_filter(filter_type, threshold_us)
         self.settings.update_roi(roi)
 
@@ -156,6 +155,13 @@ class AppController:
         changed = current != previous
         if changed:
             self.backend.update_playback_config(current)
+        return changed
+
+    def apply_prediction_mode(self, mode):
+        mode = str(mode or "").strip().lower()
+        changed = mode != self.settings.prediction_mode
+        self.settings.update_prediction(mode)
+        self.backend.set_prediction_mode(mode)
         return changed
 
     def close_ui_resources(self):

@@ -55,6 +55,7 @@ class FakeView:
         self.weight_path_label = FakeLabel()
         self.statuses = []
         self.source_paths = []
+        self.weight_paths = []
         self.controller = SimpleNamespace(source_mode="live", input_file_path=None)
 
     def set_runtime_status(self, target, text, state):
@@ -62,6 +63,11 @@ class FakeView:
 
     def set_source_status(self, file_path):
         self.source_paths.append(file_path)
+
+    def set_weight_file_display_path(self, file_path):
+        self.weight_paths.append(file_path)
+        self.weight_path_label.setText(file_path.rsplit("/", 1)[-1])
+        self.weight_path_label.setToolTip(file_path)
 
 
 def test_view_state_updates_camera_and_recording_visual_roles():
@@ -114,6 +120,7 @@ def test_view_state_updates_model_status_and_selected_paths():
     assert view.select_weight_button.enabled is False
     assert view.input_file_label.text == "events.raw"
     assert view.weight_path_label.text == "model.pth"
+    assert view.weight_paths == ["C:/models/model.pth"]
     assert view.source_paths == ["C:/records/events.raw"]
 
     state.set_model_error()

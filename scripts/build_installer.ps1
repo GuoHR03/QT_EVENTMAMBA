@@ -31,6 +31,7 @@ $PortableArchivePath = Join-Path `
 $ArtifactSourceDir = Join-Path $ProjectRoot "artifacts"
 $NativeDllSource = Join-Path $ProjectRoot "native\selective_scan_ort\bin\eventmamba_selective_scan.dll"
 $ArtifactValidator = Join-Path $ProjectRoot "tools\validate_windows_inference_artifacts.py"
+$AssetManifestValidator = Join-Path $ProjectRoot "tools\validate_asset_manifest.py"
 $NativeFpsProbe = Join-Path $ProjectRoot "tools\onnx_hierarchical_fps_custom_op_probe.py"
 $ProjectMetavisionRuntime = Join-Path $ProjectRoot "libs"
 $MetavisionSdkRoot = if ($env:METAVISION_SDK_PATH) {
@@ -68,7 +69,8 @@ $MetavisionRuntimeFiles = @(
 $ArtifactNames = @(
     "eventmamba_center_native_fps.onnx",
     "eventmamba_ellipse_native_fps.onnx",
-    "eventmamba_ellipse_matrix_A.npy"
+    "eventmamba_ellipse_matrix_A.npy",
+    "manifest.json"
 )
 
 function Assert-FileExists {
@@ -144,6 +146,20 @@ function Assert-PyInstaller {
     & $Python -c "import PyInstaller" 2>$null
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller is not installed in $EnvironmentName. Install it with: `"$Python`" -m pip install pyinstaller"
+    }
+}
+
+function Invoke-Checked {
+    param(
+        [string]$Label,
+        [string]$Executable,
+        [string[]]$Arguments
+    )
+
+    Write-Host "==> $Label"
+    & $Executable @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Label failed with exit code $LASTEXITCODE"
     }
 }
 
@@ -324,6 +340,7 @@ Assert-FileExists $InstallerScript "Inno Setup script"
 Assert-FileExists $RuntimeContract "Runtime contract"
 Assert-FileExists $RuntimeValidator "Runtime contract validator"
 Assert-FileExists $ArtifactValidator "Inference artifact validator"
+Assert-FileExists $AssetManifestValidator "Inference asset manifest validator"
 Assert-FileExists $NativeFpsProbe "Native FPS probe"
 $expectedInstallerVersion = "#define MyAppVersion `"$ReleaseVersion`""
 if (-not (Select-String `
@@ -358,6 +375,10 @@ Write-Host "==> Metavision SDK: $MetavisionSdkRoot"
 
 Assert-RuntimeContract $UiPython "ui" $MetavisionSdkRoot
 Assert-RuntimeContract $BackendPython "windows_backend"
+Invoke-Checked `
+    "Validate inference asset manifest" `
+    $BackendPython `
+    @($AssetManifestValidator)
 Assert-PyInstaller $UiPython "UI environment"
 Assert-PyInstaller $BackendPython "Windows inference environment"
 
@@ -447,6 +468,7 @@ $requiredBundleFiles = @(
     (Join-Path $artifactDestinationDir "eventmamba_center_native_fps.onnx"),
     (Join-Path $artifactDestinationDir "eventmamba_ellipse_native_fps.onnx"),
     (Join-Path $artifactDestinationDir "eventmamba_ellipse_matrix_A.npy"),
+    (Join-Path $artifactDestinationDir "manifest.json"),
     $nativeDllDestination,
     (Join-Path $UiBundleDir "_internal\app\form.ui"),
     (Join-Path $UiBundleDir "_internal\metavision_hal_internal.cp38-win_amd64.pyd"),

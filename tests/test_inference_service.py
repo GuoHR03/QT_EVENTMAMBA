@@ -12,6 +12,7 @@ from backend.inference_service import (
     STATE_STOPPED,
     STATE_STOPPING,
     InferenceService,
+    _expected_ready_pid,
     _finite_positive_timeout,
 )
 from backend.backend_healthcheck import StartupCancelledError
@@ -30,6 +31,14 @@ def _touch(root, relative_path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch()
     return path
+
+
+def test_source_windows_backend_uses_nonce_instead_of_launcher_pid():
+    process = type("Process", (), {"pid": 1234})()
+
+    assert _expected_ready_pid(process, "windows", frozen=False) is None
+    assert _expected_ready_pid(process, "windows", frozen=True) == 1234
+    assert _expected_ready_pid(process, "wsl", frozen=True) is None
 
 
 def _windows_service(root, frozen):

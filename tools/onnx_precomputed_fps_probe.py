@@ -171,7 +171,7 @@ def main():
     )
     parser.add_argument("--ort-repeats", type=int, default=1)
     parser.add_argument(
-        "--output", default="artifacts/eventmamba_center_precomputed_fps.onnx"
+        "--output", default="artifacts/experimental/eventmamba_center_precomputed_fps.onnx"
     )
     args = parser.parse_args()
 

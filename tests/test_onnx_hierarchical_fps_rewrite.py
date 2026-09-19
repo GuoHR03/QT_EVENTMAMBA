@@ -159,11 +159,11 @@ def test_rewrite_file_refuses_a_different_existing_output(tmp_path):
     "source_name,output_name",
     (
         (
-            "eventmamba_center_selective_scan_cuda.onnx",
+            "sources/eventmamba_center_selective_scan_cuda.onnx",
             "eventmamba_center_native_fps.onnx",
         ),
         (
-            "eventmamba_ellipse_selective_scan_cuda.onnx",
+            "sources/eventmamba_ellipse_selective_scan_cuda.onnx",
             "eventmamba_ellipse_native_fps.onnx",
         ),
     ),
@@ -203,7 +203,7 @@ def test_release_artifact_validator_rejects_legacy_model():
 
     with pytest.raises(RuntimeError, match="Rewritten graph inputs"):
         validate_artifacts(
-            artifacts / "eventmamba_center_selective_scan_cuda.onnx",
+            artifacts / "sources" / "eventmamba_center_selective_scan_cuda.onnx",
             artifacts / "eventmamba_ellipse_native_fps.onnx",
             artifacts / "eventmamba_ellipse_matrix_A.npy",
             root / "native/selective_scan_ort/bin/eventmamba_selective_scan.dll",

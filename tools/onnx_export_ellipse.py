@@ -40,7 +40,7 @@ def main():
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument(
         "--output",
-        default="artifacts/eventmamba_ellipse_selective_scan_loop.onnx",
+        default="artifacts/experimental/eventmamba_ellipse_selective_scan_loop.onnx",
     )
     parser.add_argument(
         "--matrix-output",
@@ -48,7 +48,7 @@ def main():
     )
     parser.add_argument(
         "--reference-output",
-        default="artifacts/eventmamba_ellipse_export_reference.npz",
+        default="artifacts/experimental/eventmamba_ellipse_export_reference.npz",
     )
     args = parser.parse_args()
 

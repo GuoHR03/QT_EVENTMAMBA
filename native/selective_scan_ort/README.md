@@ -88,12 +88,12 @@ The standalone FPS probe must match the NumPy oracle index-for-index.
 
 ### Rewrite and benchmark a complete model
 
-The repository tracks `eventmamba_center_selective_scan_cuda.onnx`, which can
+The repository tracks `artifacts/sources/eventmamba_center_selective_scan_cuda.onnx`, which can
 be used directly as the rewrite input:
 
 ```powershell
 .venv-onnx-win/Scripts/python.exe tools/onnx_insert_hierarchical_fps.py `
-  --input artifacts/eventmamba_center_selective_scan_cuda.onnx `
+  --input artifacts/sources/eventmamba_center_selective_scan_cuda.onnx `
   --output artifacts/eventmamba_center_native_fps.onnx `
   --overwrite
 ```

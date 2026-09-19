@@ -50,6 +50,14 @@ Invoke-Checked `
     "Validate development dependency contract" `
     $DevPython `
     @("tools\validate_runtime_contract.py", "--role", "test")
+Invoke-Checked `
+    "Validate UTF-8 source text" `
+    $DevPython `
+    @("tools\validate_source_text.py")
+Invoke-Checked `
+    "Validate inference asset manifest" `
+    $DevPython `
+    @("tools\validate_asset_manifest.py")
 
 $env:PYTHONUTF8 = "1"
 $env:QT_QPA_PLATFORM = "offscreen"

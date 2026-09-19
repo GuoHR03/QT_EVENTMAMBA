@@ -50,12 +50,15 @@ RAW 是主要离线格式；H5/HDF5 和 AEDAT4 作为兼容输入保留。界面
 
 ### 从当前源码工作区启动
 
-项目采用两个独立 Python 环境，不能混用：
+项目涉及两个 Python 版本，并使用三个相互隔离的虚拟环境：
 
-- UI/Metavision 环境：发布构建固定使用 CPython 3.8.20 x64 和 Metavision SDK 4.6.2。
-- Windows 推理环境：固定使用 CPython 3.13.5，负责 ONNX Runtime GPU、NumPy、ZeroMQ 和 CUDA 运行依赖。
+| 虚拟环境 | Python | 用途 |
+| --- | --- | --- |
+| `.qtcreator/Pythonvenv` | 3.8.20 | UI、Metavision，以及 UI 发布构建 |
+| `.venv-onnx-win` | 3.13.5 | Windows ONNX/CUDA 推理，以及后端发布构建 |
+| `.venv-dev` | 3.13.5 | pytest、mypy 和本地开发检查，不参与发布运行 |
 
-如果两个环境和模型资产已经准备好，可在项目根目录运行：
+三个虚拟环境不能混用。前两个是正式运行/发布环境，第三个是无硬件依赖的开发测试环境。如果两个正式运行环境和模型资产已经准备好，可在项目根目录运行：
 
 ```powershell
 .\.qtcreator\Pythonvenv\Scripts\python.exe main.py
@@ -63,18 +66,18 @@ RAW 是主要离线格式；H5/HDF5 和 AEDAT4 作为兼容输入保留。界面
 
 UI 基础依赖包括 PyQt6、pyzmq、NumPy 和 h5py；AEDAT4 兼容输入还需要单独安装 `dv_processing`。Windows 推理环境需要 ONNX Runtime GPU，以及与模型配套的 CUDA/cuDNN 运行库和自定义算子 DLL。
 
-两个环境的精确版本记录在 `runtime-contract.json`；可安装依赖分别位于
+两个正式运行环境的精确版本记录在 `runtime-contract.json`；可安装依赖分别位于
 `requirements/ui-py38.txt` 和 `requirements/backend-py313.txt`。CUDA/cuDNN
 Windows Wheel 由 `tools/install_onnx_cuda_runtime.ps1` 安装。发布构建开始前会
-校验解释器、关键包、Metavision SDK 版本和 CPython ABI，禁止混用两个环境。
+校验解释器、关键包、Metavision SDK 版本和 CPython ABI，禁止混用运行环境。
 
 完整构建环境、资产准备和安装包验收流程见 [PACKAGING.md](PACKAGING.md)。
 
 ### 本地开发与测试环境
 
 测试不使用全局 Anaconda，也不向两个正式运行环境安装 pytest/mypy。项目使用
-独立的 `.venv-dev`，它仍然是 CPython 3.13.5，因此项目的 Python 版本数量
-仍为两个：3.8.20 和 3.13.5。
+独立的 `.venv-dev`；它与推理环境使用相同的 CPython 3.13.5，但拥有独立的
+依赖集合。因此项目共有三个虚拟环境、两个 Python 版本。
 
 首次创建或修复开发环境：
 
@@ -119,6 +122,8 @@ GitHub Actions 会在每次 push 和 pull request 时运行两组无硬件检查
 - AEDAT4 使用 `dv_processing` 读取事件批次。
 - 切换输入源或 Seek 时，旧画面、旧进度和在途推理响应会被丢弃，避免混入新时间点。
 - Palette、显示 FPS 和离线播放倍速可以在播放过程中更新，不需要重新打开文件。
+- 窗口几何、面板状态、Palette、FPS、倍速、预测模式、去噪设置和最近目录会通过
+  QSettings 持久化；ROI、相机状态和推理启动状态不会自动恢复。
 
 显示 FPS 决定事件帧的切分和生成节奏；播放倍速只改变离线文件的时间推进速度。推理使用独立的 20 ms 事件窗口，不直接复用显示帧窗口。
 
@@ -167,9 +172,15 @@ artifacts/eventmamba_center_native_fps.onnx
 artifacts/eventmamba_ellipse_native_fps.onnx
 artifacts/eventmamba_ellipse_matrix_A.npy
 native/selective_scan_ort/bin/eventmamba_selective_scan.dll
+artifacts/manifest.json
 ```
 
-这些是仓库跟踪的正式运行资产。`*_selective_scan_cuda.onnx` 是重新生成 native-FPS 模型时使用的源资产；其他实验 ONNX、NPZ、日志和构建目录属于本地产物。
+这些是仓库跟踪的正式运行资产。`artifacts/sources/*_selective_scan_cuda.onnx`
+是重新生成 native-FPS 模型时使用的源资产；本地实验 ONNX、NPZ 和日志统一
+放在被 Git 与安装包忽略的 `artifacts/experimental/` 中。
+
+`artifacts/manifest.json` 按运行资产和生成源资产分组记录文件大小与 SHA-256。
+本地检查、CI 和安装包构建都会验证清单，防止模型、矩阵或自定义算子被单独替换。
 
 默认模型把三级最远点采样（Farthest Point Sampling，FPS）放入 `com.eventmamba::HierarchicalFarthestPointSampling` 原生算子。模型、椭圆矩阵和 DLL 必须配套更新。
 
@@ -242,7 +253,12 @@ SHA-256。完整依赖、目录结构、资产验证和干净电脑验收项目�
 - **H5 停止稍有延迟：**回放计时等待可以立即唤醒，但已经进入 h5py 的单次数据集读取需要在当前小批次结束后退出。
 - **中文显示乱码：**源码和文档使用 UTF-8；PowerShell 可使用 `Get-Content -Encoding UTF8` 查看。
 
-安装版日志位于 `%LOCALAPPDATA%\UI_Event`。源码模式的后端日志默认为项目运行目录下的 `eventmamba_backend.log`。
+应用日志位于 `%LOCALAPPDATA%\UI_Event`：`ui.log` 使用大小轮转，未处理异常会
+追加到 `crash.log`，推理子进程输出写入 `eventmamba_backend.log`。需要在诊断或
+自动化环境中调整全部日志目录时，可以设置 `UI_EVENT_LOG_DIR`。
+
+运行期间每 5 秒最多记录一条 `[Performance]` 摘要，包含实际 UI 显示 FPS、预测
+吞吐和 UI 显示处理耗时 p95；没有画面或预测活动时不会输出性能日志。
 
 ## 开发者概览
 

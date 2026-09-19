@@ -5,6 +5,7 @@ import torch
 
 from backend.inference_server import ZmqInferenceServer
 from backend.realtime_inference import EventMambaPredictor
+from backend.settings import DEFAULT_INFERENCE_HOST, DEFAULT_INFERENCE_PORT
 
 
 class InferenceServer(ZmqInferenceServer):
@@ -13,7 +14,7 @@ class InferenceServer(ZmqInferenceServer):
         center_weights=None,
         ellipse_weights=None,
         initial_mode="center",
-        port=5555,
+        port=DEFAULT_INFERENCE_PORT,
         instance_nonce=None,
     ):
         current_weights = (
@@ -32,7 +33,7 @@ class InferenceServer(ZmqInferenceServer):
         super().__init__(
             model,
             port,
-            "127.0.0.1",
+            DEFAULT_INFERENCE_HOST,
             error_prefix="Inference loop failed",
             instance_nonce=instance_nonce,
         )
@@ -51,7 +52,7 @@ def _parse_args():
     )
     parser.add_argument("--center-weights", help="Center-mode .pt/.pth weights")
     parser.add_argument("--ellipse-weights", help="Ellipse-mode .pt/.pth weights")
-    parser.add_argument("--port", type=int, default=5555)
+    parser.add_argument("--port", type=int, default=DEFAULT_INFERENCE_PORT)
     parser.add_argument("--instance-nonce")
     return parser.parse_args()
 
