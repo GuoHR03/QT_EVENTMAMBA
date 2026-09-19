@@ -48,7 +48,18 @@ jobs:
           python -c "from PyQt6 import QtCore; print('Qt mode: real; PyQt6=' + QtCore.PYQT_VERSION_STR)"
 
       - name: Run test suite
-        run: python -m pytest -q
+        shell: pwsh
+        run: |
+          $output = & python -m pytest -q 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | Write-Output
+          if ($exitCode -ne 0) {
+            '### pytest failure output' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            '```text' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            $output | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            '```' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            exit $exitCode
+          }
 
       - name: Run type checks
         run: >-
@@ -89,21 +100,25 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Python 3.8.20
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.8.20"
-          architecture: x64
-          cache: pip
-          cache-dependency-path: requirements/ui-py38.txt
+        shell: pwsh
+        run: |
+          $uiEnvironment = Join-Path $env:RUNNER_TEMP "ui-python"
+          $conda = Join-Path $env:CONDA "Scripts\conda.exe"
+          & $conda create --yes --prefix $uiEnvironment --channel conda-forge python=3.8.20 pip
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          "UI_PYTHON=$uiEnvironment\python.exe" | Add-Content -Path $env:GITHUB_ENV
+          & "$uiEnvironment\python.exe" --version
 
       - name: Install pinned UI dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements/ui-py38.txt
+        run: '& $env:UI_PYTHON -m pip install --disable-pip-version-check -r requirements/ui-py38.txt'
 
       - name: Validate UI runtime contract
-        run: python tools/validate_runtime_contract.py --role ui --sdk-root libs
+        run: '& $env:UI_PYTHON tools/validate_runtime_contract.py --role ui --sdk-root libs'
 
       - name: Import Metavision runtime and initialize processing components
-        run: python main.py --runtime-smoke-test
+        run: '& $env:UI_PYTHON main.py --runtime-smoke-test'
 
       - name: Construct and close the real Qt main window
-        run: python tools/smoke_ui_window.py --timeout-ms 15000
+        run: '& $env:UI_PYTHON tools/smoke_ui_window.py --timeout-ms 15000'
