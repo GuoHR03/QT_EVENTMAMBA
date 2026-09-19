@@ -70,6 +70,22 @@ jobs:
             if ($failedFiles.Count -gt 0) {
               $names = $failedFiles -join ', '
               Write-Output "::error title=pytest failing files::$names"
+              $failedTests = @()
+              foreach ($fileName in $failedFiles) {
+                $testPath = Join-Path 'tests' $fileName
+                $nodes = & python -m pytest --collect-only -q $testPath 2>$null |
+                  Where-Object { $_ -match '::' }
+                foreach ($node in $nodes) {
+                  & python -m pytest -q $node
+                  if ($LASTEXITCODE -ne 0) {
+                    $failedTests += $node
+                  }
+                }
+              }
+              if ($failedTests.Count -gt 0) {
+                $testNames = $failedTests -join ', '
+                Write-Output "::error title=pytest failing tests::$testNames"
+              }
             } else {
               Write-Output '::error title=pytest suite-only failure::Every test file passed in isolation; the failure depends on cross-file state.'
             }
