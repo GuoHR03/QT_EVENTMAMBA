@@ -58,6 +58,21 @@ jobs:
             '```text' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
             $output | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
             '```' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            $failedFiles = @()
+            Get-ChildItem -Path tests -Filter 'test_*.py' |
+              Sort-Object -Property Name |
+              ForEach-Object {
+                & python -m pytest -q $_.FullName
+                if ($LASTEXITCODE -ne 0) {
+                  $failedFiles += $_.Name
+                }
+              }
+            if ($failedFiles.Count -gt 0) {
+              $names = $failedFiles -join ', '
+              Write-Output "::error title=pytest failing files::$names"
+            } else {
+              Write-Output '::error title=pytest suite-only failure::Every test file passed in isolation; the failure depends on cross-file state.'
+            }
             exit $exitCode
           }
 
