@@ -15,7 +15,9 @@ concurrency:
 jobs:
   tests:
     name: Tests and static checks
-    runs-on: windows-latest
+    # CPython 3.8 artifacts are not published for the Windows 2025 runner.
+    # Keep both jobs on the same supported image so local/CI behavior stays aligned.
+    runs-on: windows-2022
     timeout-minutes: 20
     env:
       PYTHONUTF8: "1"
@@ -23,10 +25,10 @@ jobs:
       UI_EVENT_ALLOW_QT_STUBS: "0"
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.13.5
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13.5"
           cache: pip
@@ -77,17 +79,17 @@ jobs:
 
   ui-runtime:
     name: Python 3.8 Metavision smoke
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 20
     env:
       PYTHONUTF8: "1"
       QT_QPA_PLATFORM: offscreen
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.8.20
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.8.20"
           architecture: x64
