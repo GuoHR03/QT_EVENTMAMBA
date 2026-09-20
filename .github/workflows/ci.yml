@@ -28,14 +28,17 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Python 3.13.5
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.13.5"
-          cache: pip
-          cache-dependency-path: |
-            requirements/ci-py313.txt
-            requirements/test-py313.txt
-            requirements/dev.txt
+        shell: pwsh
+        run: |
+          $testEnvironment = Join-Path $env:RUNNER_TEMP "test-python"
+          $conda = Join-Path $env:CONDA "Scripts\conda.exe"
+          & $conda create --yes --prefix $testEnvironment --channel conda-forge python=3.13.5 pip
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $testEnvironment | Add-Content -Path $env:GITHUB_PATH
+          (Join-Path $testEnvironment "Scripts") | Add-Content -Path $env:GITHUB_PATH
+          & "$testEnvironment\python.exe" --version
 
       - name: Install CI dependencies
         run: python -m pip install --disable-pip-version-check -r requirements/ci-py313.txt
@@ -58,40 +61,6 @@ jobs:
             '```text' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
             $output | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
             '```' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-            $failedFiles = @()
-            Get-ChildItem -Path tests -Filter 'test_*.py' |
-              Sort-Object -Property Name |
-              ForEach-Object {
-                & python -m pytest -q $_.FullName
-                if ($LASTEXITCODE -ne 0) {
-                  $failedFiles += $_.Name
-                }
-              }
-            if ($failedFiles.Count -gt 0) {
-              $names = $failedFiles -join ', '
-              Write-Output "::error title=pytest failing files::$names"
-              if ($failedFiles -contains 'test_onnx_hierarchical_fps_rewrite.py') {
-                & python tools/ci_diagnose_onnx_rewrite.py
-              }
-              $failedTests = @()
-              foreach ($fileName in $failedFiles) {
-                $testPath = Join-Path 'tests' $fileName
-                $nodes = & python -m pytest --collect-only -q $testPath 2>$null |
-                  Where-Object { $_ -match '::' }
-                foreach ($node in $nodes) {
-                  & python -m pytest -q $node
-                  if ($LASTEXITCODE -ne 0) {
-                    $failedTests += $node
-                  }
-                }
-              }
-              if ($failedTests.Count -gt 0) {
-                $testNames = $failedTests -join ', '
-                Write-Output "::error title=pytest failing tests::$testNames"
-              }
-            } else {
-              Write-Output '::error title=pytest suite-only failure::Every test file passed in isolation; the failure depends on cross-file state.'
-            }
             exit $exitCode
           }
 
