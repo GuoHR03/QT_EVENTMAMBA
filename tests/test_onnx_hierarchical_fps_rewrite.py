@@ -197,6 +197,30 @@ def test_release_artifact_validator_accepts_matching_native_bundle():
     assert result["custom_op_library"]["bytes"] > 0
 
 
+def test_release_artifact_validator_accepts_randla_bundle():
+    root = Path(__file__).resolve().parents[1]
+    artifacts = root / "artifacts"
+
+    result = validate_artifacts(
+        artifacts / "eventmamba_center_native_fps.onnx",
+        artifacts / "eventmamba_ellipse_native_fps.onnx",
+        artifacts / "eventmamba_ellipse_matrix_A.npy",
+        root / "native/selective_scan_ort/bin/eventmamba_selective_scan.dll",
+        artifacts / "eventmamba_ellipse_randla_native.onnx",
+        artifacts / "eventmamba_ellipse_randla_matrix_A.npy",
+    )
+
+    assert result["randla_ellipse"]["inputs"] == [
+        "events",
+        "sample0",
+        "sample1",
+        "sample2",
+    ]
+    assert result["randla_ellipse"]["selective_scan_core_nodes"] == 6
+    assert result["randla_ellipse"]["topk_nodes"] == 9
+    assert result["randla_matrix"]["shape"] == [2, 512]
+
+
 def test_release_artifact_validator_rejects_legacy_model():
     root = Path(__file__).resolve().parents[1]
     artifacts = root / "artifacts"

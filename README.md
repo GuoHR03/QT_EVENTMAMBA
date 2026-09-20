@@ -171,6 +171,8 @@ Windows 原生推理需要以下四项配套资产：
 artifacts/eventmamba_center_native_fps.onnx
 artifacts/eventmamba_ellipse_native_fps.onnx
 artifacts/eventmamba_ellipse_matrix_A.npy
+artifacts/eventmamba_ellipse_randla_native.onnx
+artifacts/eventmamba_ellipse_randla_matrix_A.npy
 native/selective_scan_ort/bin/eventmamba_selective_scan.dll
 artifacts/manifest.json
 ```
@@ -217,6 +219,20 @@ EVENTMAMBA_WSL_DISTRO=EventMamba_mini
 EVENTMAMBA_LINUX_PYTHON=/opt/miniconda3/envs/eventmamba/bin/python
 ```
 
+PowerShell 中可按下面方式启动源码 UI，使模型选择器接受 `.pth` 权重：
+
+```powershell
+$env:EVENTMAMBA_INFERENCE_RUNTIME = "wsl"
+$env:EVENTMAMBA_WSL_DISTRO = "EventMamba_mini"
+& .\.qtcreator\Pythonvenv\Scripts\python.exe main.py
+```
+
+WSL 椭圆预测器会根据 checkpoint 的参数签名自动识别标准 EventMamba v3 或
+RandLA random-sample 架构；两者都要求权重同目录存在配套的 `matrix_A.pt`。
+RandLA 模型也已支持 Windows ONNX/CUDA：在“椭圆”模式下选择
+`artifacts/eventmamba_ellipse_randla_native.onnx`，后端会自动选择同目录的
+`eventmamba_ellipse_randla_matrix_A.npy`，并生成三层无重复随机采样索引。
+
 UI 与推理后端使用 `eventmamba/v1` 协议：控制消息为受限 JSON，事件数据为固定 `(1024, 3)` little-endian `float32` 二进制帧。更新协议后必须同时替换 UI 与后端，不能混用新旧可执行文件。
 
 ## 构建 Windows 发布版
@@ -260,6 +276,12 @@ SHA-256。完整依赖、目录结构、资产验证和干净电脑验收项目�
 运行期间每 5 秒最多记录一条 `[Performance]` 摘要，包含实际 UI 显示 FPS、预测
 吞吐，以及 UI、推理载荷构建、队列等待、ZMQ、ONNX 推理和端到端延迟的 p95；
 没有画面或预测活动时不会输出性能日志。
+
+推理载荷线程会根据窗口积压、窗口年龄、到达间隔和近期处理耗时自适应合并旧
+窗口；处理能力充足时保持 FIFO，落后时只构建最新窗口，以减少无效 CPU 开销和
+预测延迟。开发环境可单独运行 `python tools/benchmark_hot_paths.py --check` 检查
+载荷构建、窗口切片和队列合并热路径的性能预算；完整 `scripts/check.ps1` 和 CI
+也会执行相同的回归基准。
 
 ## 开发者概览
 

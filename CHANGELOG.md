@@ -5,6 +5,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- 增加自适应推理窗口队列：负载健康时保持 FIFO，积压或延迟升高时合并旧窗口，并记录限频丢弃摘要。
+- 增加载荷构建、事件窗口切片和队列合并的性能回归基准，接入本地完整检查与 CI。
+- WSL/PyTorch 椭圆预测器可按 checkpoint 参数签名加载 RandLA random-sample 架构，并修复 Python 3.8 模型资产类型注解兼容性。
+- 增加 RandLA random-sample 椭圆模型的 Windows ONNX/CUDA 导出与运行契约，外置三层采样索引、复用 CUDA selective-scan，并自动匹配专属 VSA 矩阵。
+- Windows 模型选择器和安装包端到端冒烟测试完整覆盖 RandLA ONNX 资产，后端基准同时输出模型推理与请求往返延迟。
+- Windows native ONNX 模型在后端就绪前完成独立 RNG 预热，避免 EventMamba 或 RandLA 的第一笔正式请求承担 CUDA 初始化开销。
+
 ## [0.2.1] - 2026-09-08
 
 ### Added

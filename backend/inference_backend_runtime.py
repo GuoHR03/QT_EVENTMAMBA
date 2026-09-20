@@ -139,18 +139,27 @@ def build_windows_launch(
     ellipse_model_path = resolve_runtime_path(ellipse_model, project_dir)
     selected_path = str(weights_path)
     selected_name = os.path.basename(selected_path).lower()
+    selected_ellipse_model = False
     if selected_path.lower().endswith(".onnx"):
         selected_path = resolve_runtime_path(selected_path, project_dir)
         if "ellipse" in selected_name:
             ellipse_model_path = selected_path
+            selected_ellipse_model = True
         elif "center" in selected_name:
             center_model_path = selected_path
         elif prediction_mode == "ellipse":
             ellipse_model_path = selected_path
+            selected_ellipse_model = True
         else:
             center_model_path = selected_path
 
     ellipse_matrix_path = resolve_runtime_path(ellipse_matrix, project_dir)
+    if selected_ellipse_model:
+        ellipse_matrix_path = _companion_ellipse_matrix(
+            ellipse_model_path,
+            ellipse_matrix_path,
+            is_file,
+        )
     custom_op_path = resolve_runtime_path(custom_op_library, project_dir)
     required = {
         "center ONNX model": center_model_path,
@@ -207,6 +216,19 @@ def build_windows_launch(
             instance_nonce,
         )
     return BackendLaunch(command, active_model_path)
+
+
+def _companion_ellipse_matrix(model_path, fallback_path, is_file=os.path.isfile):
+    stem, _extension = os.path.splitext(model_path)
+    candidates = []
+    for suffix in ("_native_fps", "_native"):
+        if stem.lower().endswith(suffix):
+            candidates.append(stem[: -len(suffix)] + "_matrix_A.npy")
+    candidates.append(stem + "_matrix_A.npy")
+    for candidate in candidates:
+        if is_file(candidate):
+            return candidate
+    return fallback_path
 
 
 def build_wsl_launch(

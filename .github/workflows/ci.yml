@@ -48,6 +48,7 @@ jobs:
           python tools/validate_runtime_contract.py --role test
           python tools/validate_source_text.py
           python tools/validate_asset_manifest.py
+          python tools/validate_windows_inference_artifacts.py --randla-ellipse artifacts/eventmamba_ellipse_randla_native.onnx --randla-matrix artifacts/eventmamba_ellipse_randla_matrix_A.npy
           python -c "from PyQt6 import QtCore; print('Qt mode: real; PyQt6=' + QtCore.PYQT_VERSION_STR)"
 
       - name: Run test suite
@@ -63,6 +64,9 @@ jobs:
             '```' | Add-Content -Path $env:GITHUB_STEP_SUMMARY
             exit $exitCode
           }
+
+      - name: Run performance regression benchmarks
+        run: python tools/benchmark_hot_paths.py --check
 
       - name: Run type checks
         run: >-

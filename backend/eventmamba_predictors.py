@@ -7,6 +7,9 @@ from backend.models.eventmamba_v1 import EventMamba as CenterEventMamba
 from backend.models.eventmamba_v3 import EventMamba as EllipseEventMamba
 
 
+RANDLA_ELLIPSE_SIGNATURE = "group.geo_mlp.0.weight"
+
+
 def inplace_relu(module):
     if "ReLU" in module.__class__.__name__:
         module.inplace = True
@@ -69,18 +72,21 @@ class EllipsePredictor(BasePredictor):
         asset = validate_model_asset(MODE_ELLIPSE, weights_path)
         super().__init__(weights_path, device)
         self.matrix_path = asset.matrix_path
-        self.model = EllipseEventMamba(num_classes=1024).to(self.device)
+        self.model = None
         self.matrix_A = None
         self._load_runtime_assets()
 
     def _load_runtime_assets(self):
         try:
             state_dict = torch.load(self.weights_path, map_location=self.device)
-            self.model.load_state_dict(self.extract_state_dict(state_dict))
+            state_dict = self.extract_state_dict(state_dict)
+            self.model, architecture_name = _create_ellipse_model(state_dict)
+            self.model = self.model.to(self.device)
+            self.model.load_state_dict(state_dict)
             matrix_a = torch.load(self.matrix_path, map_location=self.device)
             self.matrix_A = matrix_a.to(self.device).float()
             self.load_message = (
-                f"成功加载椭圆权重: {self.weights_path}; "
+                f"成功加载椭圆权重 ({architecture_name}): {self.weights_path}; "
                 f"成功加载 matrix_A: {self.matrix_path}"
             )
         except Exception as exc:
@@ -106,3 +112,13 @@ class EllipsePredictor(BasePredictor):
             predict_vsa = torch.complex(real_part, imag_part)
             decoded = vsa.Decode_VSA(predict_vsa, self.matrix_A, isELL=True)
         return decoded.squeeze(0).cpu().numpy().tolist()
+
+
+def _create_ellipse_model(state_dict):
+    if RANDLA_ELLIPSE_SIGNATURE in state_dict:
+        from backend.models.eventmamba_v3_randla_locfe_grouper_v3_randsample import (
+            EventMamba as RandlaEllipseEventMamba,
+        )
+
+        return RandlaEllipseEventMamba(num_classes=1024), "RandLA random-sample"
+    return EllipseEventMamba(num_classes=1024), "EventMamba v3"

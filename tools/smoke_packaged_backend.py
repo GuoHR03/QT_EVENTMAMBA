@@ -77,15 +77,22 @@ def benchmark_mode(socket, events, mode, repeats):
     configure_mode(socket, mode)
     for _ in range(5):
         request_prediction(socket, events, mode)
-    times = []
+    roundtrip_times = []
+    inference_times = []
     for _ in range(repeats):
         started = time.perf_counter()
-        request_prediction(socket, events, mode)
-        times.append((time.perf_counter() - started) * 1000.0)
+        response = request_prediction(socket, events, mode)
+        roundtrip_times.append((time.perf_counter() - started) * 1000.0)
+        inference_times.append(float(response["inference_ms"]))
+    other_times = np.subtract(roundtrip_times, inference_times)
     return {
-        "mean_ms": float(np.mean(times)),
-        "p50_ms": float(np.percentile(times, 50)),
-        "p95_ms": float(np.percentile(times, 95)),
+        "roundtrip_mean_ms": float(np.mean(roundtrip_times)),
+        "roundtrip_p50_ms": float(np.percentile(roundtrip_times, 50)),
+        "roundtrip_p95_ms": float(np.percentile(roundtrip_times, 95)),
+        "inference_mean_ms": float(np.mean(inference_times)),
+        "inference_p50_ms": float(np.percentile(inference_times, 50)),
+        "inference_p95_ms": float(np.percentile(inference_times, 95)),
+        "other_mean_ms": float(np.mean(other_times)),
     }
 
 
@@ -138,10 +145,14 @@ def main():
             print(
                 "BACKEND_BENCHMARK "
                 f"repeats={args.benchmark_repeats} "
-                f"center_p50_ms={center_benchmark['p50_ms']:.3f} "
-                f"center_p95_ms={center_benchmark['p95_ms']:.3f} "
-                f"ellipse_p50_ms={ellipse_benchmark['p50_ms']:.3f} "
-                f"ellipse_p95_ms={ellipse_benchmark['p95_ms']:.3f}"
+                f"center_roundtrip_p50_ms={center_benchmark['roundtrip_p50_ms']:.3f} "
+                f"center_roundtrip_p95_ms={center_benchmark['roundtrip_p95_ms']:.3f} "
+                f"center_inference_p50_ms={center_benchmark['inference_p50_ms']:.3f} "
+                f"center_inference_p95_ms={center_benchmark['inference_p95_ms']:.3f} "
+                f"ellipse_roundtrip_p50_ms={ellipse_benchmark['roundtrip_p50_ms']:.3f} "
+                f"ellipse_roundtrip_p95_ms={ellipse_benchmark['roundtrip_p95_ms']:.3f} "
+                f"ellipse_inference_p50_ms={ellipse_benchmark['inference_p50_ms']:.3f} "
+                f"ellipse_inference_p95_ms={ellipse_benchmark['inference_p95_ms']:.3f}"
             )
     finally:
         if socket is not None:

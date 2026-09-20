@@ -21,6 +21,18 @@
       "role": "ellipse VSA decode matrix"
     },
     {
+      "path": "artifacts/eventmamba_ellipse_randla_native.onnx",
+      "bytes": 6330836,
+      "sha256": "96fc3b4475b8c99f5593bfb3dec97a1163b9cbcca642639e4ae23136654fb6b7",
+      "role": "RandLA random-sample ellipse ONNX model with external sampling indices"
+    },
+    {
+      "path": "artifacts/eventmamba_ellipse_randla_matrix_A.npy",
+      "bytes": 4224,
+      "sha256": "2ccc799a74eb0751b75734dda9b080a864852a2e8fae30b04414395789d2b242",
+      "role": "RandLA random-sample ellipse VSA decode matrix"
+    },
+    {
       "path": "native/selective_scan_ort/bin/eventmamba_selective_scan.dll",
       "bytes": 97280,
       "sha256": "ea5c6f3f82654adfb84054402f1419f819d5cfce05a0f748146ea3448a827cef",
@@ -39,6 +51,12 @@
       "bytes": 6135997,
       "sha256": "31078a6bc541e8c99a084cd515860793cca1888a1edf3b2e54336d31e89aea2e",
       "role": "ellipse model input for native-FPS rewrite"
+    },
+    {
+      "path": "artifacts/sources/eventmamba_ellipse_randla_selective_scan_cuda.onnx",
+      "bytes": 6330836,
+      "sha256": "96fc3b4475b8c99f5593bfb3dec97a1163b9cbcca642639e4ae23136654fb6b7",
+      "role": "RandLA random-sample ellipse model with CUDA selective-scan nodes"
     }
   ]
 }

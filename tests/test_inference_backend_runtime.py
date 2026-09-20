@@ -2,6 +2,7 @@ import pytest
 
 from backend.inference_backend_runtime import (
     InferenceRuntimeSettings,
+    _companion_ellipse_matrix,
     build_wsl_launch,
     finite_positive_timeout,
 )
@@ -65,3 +66,16 @@ def test_wsl_launch_owns_platform_specific_command_conversion():
     ]
     assert launch.command[-4:] == ["--port", "6000", "--instance-nonce", "nonce"]
     assert launch.active_model_path == r"E:\models\center.pth"
+
+
+def test_randla_ellipse_model_uses_its_companion_matrix():
+    model = r"E:\project\artifacts\eventmamba_ellipse_randla_native.onnx"
+    companion = r"E:\project\artifacts\eventmamba_ellipse_randla_matrix_A.npy"
+
+    resolved = _companion_ellipse_matrix(
+        model,
+        r"E:\project\artifacts\eventmamba_ellipse_matrix_A.npy",
+        is_file=lambda path: path == companion,
+    )
+
+    assert resolved == companion

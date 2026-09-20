@@ -58,6 +58,11 @@ Invoke-Checked `
     "Validate inference asset manifest" `
     $DevPython `
     @("tools\validate_asset_manifest.py")
+Invoke-Checked "Validate Windows inference artifacts" $DevPython @(
+    "tools\validate_windows_inference_artifacts.py",
+    "--randla-ellipse", "artifacts\eventmamba_ellipse_randla_native.onnx",
+    "--randla-matrix", "artifacts\eventmamba_ellipse_randla_matrix_A.npy"
+)
 
 $env:PYTHONUTF8 = "1"
 $env:QT_QPA_PLATFORM = "offscreen"
@@ -68,6 +73,9 @@ Invoke-Checked "Verify real Qt import" $DevPython @(
     "from PyQt6 import QtCore; print('Qt mode: real; PyQt6=' + QtCore.PYQT_VERSION_STR)"
 )
 Invoke-Checked "Run test suite" $DevPython @("-m", "pytest", "-q")
+Invoke-Checked "Run performance regression benchmarks" $DevPython @(
+    "tools\benchmark_hot_paths.py", "--check"
+)
 Invoke-Checked "Run type checks" $DevPython @(
     "-m", "mypy",
     "app", "backend", "tools\validate_runtime_contract.py",

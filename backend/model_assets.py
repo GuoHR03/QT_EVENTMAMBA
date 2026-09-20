@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 from backend.model_contract import (
     MODE_CENTER,
@@ -15,7 +16,7 @@ MATRIX_A_FILENAME = "matrix_A.pt"
 class ModelAsset:
     mode: str
     weights_path: str
-    matrix_path: str | None = None
+    matrix_path: Optional[str] = None
 
 
 def matrix_path_for_weights(weights_path):

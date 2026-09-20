@@ -37,6 +37,8 @@ artifacts/experimental/
 !artifacts/eventmamba_center_native_fps.onnx
 !artifacts/eventmamba_ellipse_native_fps.onnx
 !artifacts/eventmamba_ellipse_matrix_A.npy
+!artifacts/eventmamba_ellipse_randla_native.onnx
+!artifacts/eventmamba_ellipse_randla_matrix_A.npy
 !artifacts/sources/
 !artifacts/sources/*.onnx
 .venv-onnx-win/

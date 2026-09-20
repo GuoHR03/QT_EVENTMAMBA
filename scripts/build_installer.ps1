@@ -70,6 +70,8 @@ $ArtifactNames = @(
     "eventmamba_center_native_fps.onnx",
     "eventmamba_ellipse_native_fps.onnx",
     "eventmamba_ellipse_matrix_A.npy",
+    "eventmamba_ellipse_randla_native.onnx",
+    "eventmamba_ellipse_randla_matrix_A.npy",
     "manifest.json"
 )
 
@@ -190,6 +192,8 @@ function Assert-InferenceArtifacts {
         [string]$CenterModel,
         [string]$EllipseModel,
         [string]$EllipseMatrix,
+        [string]$RandLAEllipseModel,
+        [string]$RandLAEllipseMatrix,
         [string]$CustomOpLibrary,
         [switch]$ProbeNativeFps
     )
@@ -199,6 +203,8 @@ function Assert-InferenceArtifacts {
         --center $CenterModel `
         --ellipse $EllipseModel `
         --matrix $EllipseMatrix `
+        --randla-ellipse $RandLAEllipseModel `
+        --randla-matrix $RandLAEllipseMatrix `
         --custom-op-library $CustomOpLibrary
     if ($LASTEXITCODE -ne 0) {
         throw "Inference artifact contract validation failed"
@@ -221,7 +227,8 @@ function Invoke-PackagedBackendSmoke {
         [string]$CenterModel,
         [string]$EllipseModel,
         [string]$EllipseMatrix,
-        [string]$CustomOpLibrary
+        [string]$CustomOpLibrary,
+        [string]$SmokeName
     )
 
     $listener = [System.Net.Sockets.TcpListener]::new(
@@ -232,18 +239,18 @@ function Invoke-PackagedBackendSmoke {
     $port = $listener.LocalEndpoint.Port
     $listener.Stop()
 
-    $stdoutLog = Join-Path $BuildRoot "packaged_backend_smoke.stdout.log"
-    $stderrLog = Join-Path $BuildRoot "packaged_backend_smoke.stderr.log"
+    $stdoutLog = Join-Path $BuildRoot "packaged_backend_$SmokeName.stdout.log"
+    $stderrLog = Join-Path $BuildRoot "packaged_backend_$SmokeName.stderr.log"
     $arguments = @(
         "--center-model", "`"$CenterModel`"",
         "--ellipse-model", "`"$EllipseModel`"",
         "--ellipse-matrix", "`"$EllipseMatrix`"",
         "--custom-op-library", "`"$CustomOpLibrary`"",
         "--port", "$port",
-        "--instance-nonce", "packaged-fps-smoke"
+        "--instance-nonce", "packaged-$SmokeName-smoke"
     )
 
-    Write-Host "==> Running packaged backend native-FPS smoke on port $port"
+    Write-Host "==> Running packaged backend $SmokeName smoke on port $port"
     $process = Start-Process `
         -FilePath $BackendExecutable `
         -ArgumentList $arguments `
@@ -386,6 +393,8 @@ Assert-InferenceArtifacts `
     -CenterModel (Join-Path $ArtifactSourceDir "eventmamba_center_native_fps.onnx") `
     -EllipseModel (Join-Path $ArtifactSourceDir "eventmamba_ellipse_native_fps.onnx") `
     -EllipseMatrix (Join-Path $ArtifactSourceDir "eventmamba_ellipse_matrix_A.npy") `
+    -RandLAEllipseModel (Join-Path $ArtifactSourceDir "eventmamba_ellipse_randla_native.onnx") `
+    -RandLAEllipseMatrix (Join-Path $ArtifactSourceDir "eventmamba_ellipse_randla_matrix_A.npy") `
     -CustomOpLibrary $NativeDllSource `
     -ProbeNativeFps
 
@@ -468,6 +477,8 @@ $requiredBundleFiles = @(
     (Join-Path $artifactDestinationDir "eventmamba_center_native_fps.onnx"),
     (Join-Path $artifactDestinationDir "eventmamba_ellipse_native_fps.onnx"),
     (Join-Path $artifactDestinationDir "eventmamba_ellipse_matrix_A.npy"),
+    (Join-Path $artifactDestinationDir "eventmamba_ellipse_randla_native.onnx"),
+    (Join-Path $artifactDestinationDir "eventmamba_ellipse_randla_matrix_A.npy"),
     (Join-Path $artifactDestinationDir "manifest.json"),
     $nativeDllDestination,
     (Join-Path $UiBundleDir "_internal\app\form.ui"),
@@ -484,6 +495,8 @@ Assert-InferenceArtifacts `
     -CenterModel (Join-Path $artifactDestinationDir "eventmamba_center_native_fps.onnx") `
     -EllipseModel (Join-Path $artifactDestinationDir "eventmamba_ellipse_native_fps.onnx") `
     -EllipseMatrix (Join-Path $artifactDestinationDir "eventmamba_ellipse_matrix_A.npy") `
+    -RandLAEllipseModel (Join-Path $artifactDestinationDir "eventmamba_ellipse_randla_native.onnx") `
+    -RandLAEllipseMatrix (Join-Path $artifactDestinationDir "eventmamba_ellipse_randla_matrix_A.npy") `
     -CustomOpLibrary $nativeDllDestination
 Assert-DirectoryExists (Join-Path $UiBundleDir "_internal\libs\bin") "Bundled Metavision release DLLs"
 Assert-DirectoryExists (Join-Path $BackendRuntimeDir "_internal") "Bundled Windows inference dependencies"
@@ -520,7 +533,15 @@ Invoke-PackagedBackendSmoke `
     -CenterModel (Join-Path $artifactDestinationDir "eventmamba_center_native_fps.onnx") `
     -EllipseModel (Join-Path $artifactDestinationDir "eventmamba_ellipse_native_fps.onnx") `
     -EllipseMatrix (Join-Path $artifactDestinationDir "eventmamba_ellipse_matrix_A.npy") `
-    -CustomOpLibrary $nativeDllDestination
+    -CustomOpLibrary $nativeDllDestination `
+    -SmokeName "eventmamba"
+Invoke-PackagedBackendSmoke `
+    -BackendExecutable (Join-Path $BackendRuntimeDir "UI_Event_Backend.exe") `
+    -CenterModel (Join-Path $artifactDestinationDir "eventmamba_center_native_fps.onnx") `
+    -EllipseModel (Join-Path $artifactDestinationDir "eventmamba_ellipse_randla_native.onnx") `
+    -EllipseMatrix (Join-Path $artifactDestinationDir "eventmamba_ellipse_randla_matrix_A.npy") `
+    -CustomOpLibrary $nativeDllDestination `
+    -SmokeName "randla"
 
 Write-Host "==> Portable bundle ready: $UiBundleDir"
 

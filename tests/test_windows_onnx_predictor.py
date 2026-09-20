@@ -1,15 +1,20 @@
+import sys
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
 from backend.windows_onnx_predictor import (
     FPS_CONTRACT_LEGACY,
     FPS_CONTRACT_NATIVE,
+    FPS_CONTRACT_RANDLA,
     WindowsOnnxCenterPredictor,
     WindowsOnnxEllipsePredictor,
     WindowsOnnxPredictorRuntime,
     _model_input_contract,
     build_fps_inputs,
     build_fps_starts,
+    build_random_sample_inputs,
     furthest_point_sample_indices,
 )
 
@@ -53,6 +58,25 @@ def test_build_fps_starts_match_legacy_stage_start_indices():
     assert starts.tolist() == [[fps0[0, 0], fps1[0, 0], fps2[0, 0]]]
 
 
+def test_build_random_sample_inputs_are_unique_sorted_and_deterministic():
+    first = build_random_sample_inputs(np.random.default_rng(2026))
+    second = build_random_sample_inputs(np.random.default_rng(2026))
+
+    for actual, repeated, population, count in zip(
+        first,
+        second,
+        (1024, 512, 256),
+        (512, 256, 128),
+    ):
+        assert actual.shape == (1, count)
+        assert actual.dtype == np.int64
+        assert actual.flags.c_contiguous
+        assert np.array_equal(actual, repeated)
+        assert len(np.unique(actual)) == count
+        assert np.all(actual[:, 1:] > actual[:, :-1])
+        assert np.all((actual >= 0) & (actual < population))
+
+
 class FakeModelInput:
     def __init__(self, name, shape, input_type):
         self.name = name
@@ -79,9 +103,18 @@ def test_model_input_contract_accepts_native_and_legacy_shapes():
             ("fps2", [1, 128], "tensor(int64)"),
         ]
     )
+    randla = _model_inputs(
+        [
+            ("events", [1, 3, 1024], "tensor(float)"),
+            ("sample0", [1, 512], "tensor(int64)"),
+            ("sample1", [1, 256], "tensor(int64)"),
+            ("sample2", [1, 128], "tensor(int64)"),
+        ]
+    )
 
     assert _model_input_contract(native, "center") == FPS_CONTRACT_NATIVE
     assert _model_input_contract(legacy, "center") == FPS_CONTRACT_LEGACY
+    assert _model_input_contract(randla, "ellipse") == FPS_CONTRACT_RANDLA
 
 
 @pytest.mark.parametrize(
@@ -174,6 +207,83 @@ def test_center_predictor_native_contract_never_runs_python_fps(monkeypatch):
     )
 
     assert predictor.predict(events) == [0.25, 0.75]
+
+
+def test_predictor_builds_randla_random_sample_inputs():
+    class FakeSession:
+        def run(self, output_names, inputs):
+            assert output_names is None
+            assert set(inputs) == {"events", "sample0", "sample1", "sample2"}
+            assert inputs["sample0"].shape == (1, 512)
+            assert inputs["sample1"].shape == (1, 256)
+            assert inputs["sample2"].shape == (1, 128)
+            return [np.zeros((1, 1024), dtype=np.float32)]
+
+    predictor = object.__new__(WindowsOnnxEllipsePredictor)
+    predictor.session = FakeSession()
+    predictor.rng = np.random.default_rng(2026)
+    predictor.fps_contract = FPS_CONTRACT_RANDLA
+
+    output = predictor.run_model(np.zeros((1024, 3), dtype=np.float32))
+
+    assert output.shape == (1, 1024)
+
+
+def test_native_predictor_warms_up_without_consuming_live_rng(
+    monkeypatch,
+    tmp_path,
+):
+    runs = []
+
+    class FakeSessionOptions:
+        def __init__(self):
+            self.log_severity_level = None
+
+        def register_custom_ops_library(self, _path):
+            return None
+
+    class FakeSession:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_providers(self):
+            return ["CUDAExecutionProvider"]
+
+        def get_inputs(self):
+            return _model_inputs(
+                [
+                    ("events", [1, 3, 1024], "tensor(float)"),
+                    ("fps_starts", [1, 3], "tensor(int64)"),
+                ]
+            )
+
+        def run(self, _output_names, inputs):
+            runs.append({name: value.copy() for name, value in inputs.items()})
+            return [np.zeros((1, 2), dtype=np.float32)]
+
+    fake_ort = SimpleNamespace(
+        SessionOptions=FakeSessionOptions,
+        InferenceSession=FakeSession,
+        get_available_providers=lambda: ["CUDAExecutionProvider"],
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    monkeypatch.setattr(
+        "backend.windows_onnx_predictor.prepare_windows_cuda_runtime",
+        lambda: (),
+    )
+    model_path = tmp_path / "center.onnx"
+    library_path = tmp_path / "custom.dll"
+    model_path.write_bytes(b"model")
+    library_path.write_bytes(b"library")
+
+    predictor = WindowsOnnxCenterPredictor(model_path, library_path, seed=7)
+
+    assert len(runs) == 1
+    assert "Warmup: complete" in predictor.load_message
+    predictor.predict(np.zeros((1024, 3), dtype=np.float32))
+    assert len(runs) == 2
+    assert runs[0]["fps_starts"].tolist() == [[967, 320, 175]]
+    assert runs[1]["fps_starts"].tolist() == [[967, 320, 175]]
 
 
 def test_ellipse_predictor_decodes_onnx_vector(monkeypatch):

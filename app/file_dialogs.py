@@ -24,7 +24,7 @@ def choose_weights_file(parent, runtime_kind="wsl", initial_dir=None):
         title = "选择 Windows ONNX 模型"
         default_dir = default_onnx_model_dir()
         file_filter = (
-            "正式 ONNX 模型 (*_native_fps.onnx);;"
+            "正式 ONNX 模型 (*_native_fps.onnx *_native.onnx);;"
             "全部 ONNX 模型 (*.onnx);;"
             "所有文件 (*)"
         )

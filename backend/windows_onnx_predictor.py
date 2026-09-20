@@ -19,6 +19,7 @@ from backend.windows_onnx_runtime import prepare_windows_cuda_runtime
 
 FPS_CONTRACT_NATIVE = "native"
 FPS_CONTRACT_LEGACY = "legacy"
+FPS_CONTRACT_RANDLA = "randla-random-sample"
 
 _NATIVE_INPUT_SPEC = {
     "events": (MODEL_INPUT_SHAPE, "tensor(float)"),
@@ -29,6 +30,12 @@ _LEGACY_INPUT_SPEC = {
     "fps0": ((1, FPS_STAGE_COUNTS[0]), "tensor(int64)"),
     "fps1": ((1, FPS_STAGE_COUNTS[1]), "tensor(int64)"),
     "fps2": ((1, FPS_STAGE_COUNTS[2]), "tensor(int64)"),
+}
+_RANDLA_INPUT_SPEC = {
+    "events": (MODEL_INPUT_SHAPE, "tensor(float)"),
+    "sample0": ((1, FPS_STAGE_COUNTS[0]), "tensor(int64)"),
+    "sample1": ((1, FPS_STAGE_COUNTS[1]), "tensor(int64)"),
+    "sample2": ((1, FPS_STAGE_COUNTS[2]), "tensor(int64)"),
 }
 
 
@@ -44,11 +51,15 @@ def _model_input_contract(model_inputs, mode_name):
     elif actual_names == set(_LEGACY_INPUT_SPEC):
         contract = FPS_CONTRACT_LEGACY
         expected_spec = _LEGACY_INPUT_SPEC
+    elif actual_names == set(_RANDLA_INPUT_SPEC):
+        contract = FPS_CONTRACT_RANDLA
+        expected_spec = _RANDLA_INPUT_SPEC
     else:
         raise RuntimeError(
             f"Unexpected {mode_name} model inputs: {sorted(actual_names)}; "
             f"expected {sorted(_NATIVE_INPUT_SPEC)} or "
-            f"{sorted(_LEGACY_INPUT_SPEC)}"
+            f"{sorted(_LEGACY_INPUT_SPEC)} or "
+            f"{sorted(_RANDLA_INPUT_SPEC)}"
         )
 
     for name, (expected_shape, expected_type) in expected_spec.items():
@@ -104,6 +115,16 @@ def build_fps_starts(rng):
     return starts
 
 
+def build_random_sample_inputs(rng):
+    """Build the three sorted, without-replacement RandLA sample sets."""
+    inputs = []
+    populations = (EVENT_SHAPE[0],) + FPS_STAGE_COUNTS[:-1]
+    for population, count in zip(populations, FPS_STAGE_COUNTS):
+        indices = rng.choice(population, count, replace=False)
+        inputs.append(np.ascontiguousarray(np.sort(indices)[None], dtype=np.int64))
+    return tuple(inputs)
+
+
 class WindowsOnnxPredictor:
     mode_name = "model"
 
@@ -142,14 +163,22 @@ class WindowsOnnxPredictor:
             self.mode_name,
         )
         self.rng = np.random.default_rng(seed)
+        warmup_message = ""
+        if self.fps_contract in (FPS_CONTRACT_NATIVE, FPS_CONTRACT_RANDLA):
+            warmup_events = np.random.default_rng(seed).standard_normal(EVENT_SHAPE)
+            self.run_model(
+                np.asarray(warmup_events, dtype=np.float32),
+                rng=np.random.default_rng(seed),
+            )
+            warmup_message = "\nWarmup: complete"
         self.load_message = (
             f"Windows ONNX CUDA {self.mode_name} model loaded\n"
             f"Model: {self.model_path}\n"
             f"Provider: {self.session.get_providers()[0]}\n"
-            f"FPS: {self.fps_contract}"
+            f"FPS: {self.fps_contract}{warmup_message}"
         )
 
-    def run_model(self, event_data):
+    def run_model(self, event_data, rng=None):
         event_data = np.ascontiguousarray(event_data, dtype=np.float32)
         if event_data.shape != EVENT_SHAPE:
             raise ValueError(
@@ -159,15 +188,25 @@ class WindowsOnnxPredictor:
         inputs = {
             "events": np.ascontiguousarray(event_data.T[None], dtype=np.float32),
         }
+        active_rng = self.rng if rng is None else rng
         if self.fps_contract == FPS_CONTRACT_NATIVE:
-            inputs["fps_starts"] = build_fps_starts(self.rng)
+            inputs["fps_starts"] = build_fps_starts(active_rng)
         elif self.fps_contract == FPS_CONTRACT_LEGACY:
-            fps0, fps1, fps2 = build_fps_inputs(event_data, self.rng)
+            fps0, fps1, fps2 = build_fps_inputs(event_data, active_rng)
             inputs.update(
                 {
                     "fps0": fps0,
                     "fps1": fps1,
                     "fps2": fps2,
+                }
+            )
+        elif self.fps_contract == FPS_CONTRACT_RANDLA:
+            sample0, sample1, sample2 = build_random_sample_inputs(active_rng)
+            inputs.update(
+                {
+                    "sample0": sample0,
+                    "sample1": sample1,
+                    "sample2": sample2,
                 }
             )
         else:
