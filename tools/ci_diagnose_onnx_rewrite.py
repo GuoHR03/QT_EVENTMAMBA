@@ -5,6 +5,7 @@ from pathlib import Path
 import traceback
 
 import onnx
+import pytest
 from onnx import TensorProto, helper
 
 from tools.onnx_insert_hierarchical_fps import (
@@ -67,6 +68,28 @@ def _escape_workflow_command(value: str) -> str:
     )
 
 
+class _FailureReporter:
+    def __init__(self) -> None:
+        self.reported = False
+
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        if not report.failed:
+            return
+        self.reported = True
+        crash = getattr(report.longrepr, "reprcrash", None)
+        if crash is None:
+            detail = f"pytest {report.when} failure: {report.longrepr}"
+        else:
+            detail = (
+                f"pytest {report.when} failure at "
+                f"{Path(crash.path).name}:{crash.lineno}: {crash.message}"
+            )
+        print(
+            "::error title=ONNX pytest diagnostic::"
+            + _escape_workflow_command(detail[:1000])
+        )
+
+
 try:
     rewrite_model(_source_model())
     test_path = (
@@ -94,4 +117,18 @@ except Exception as exc:
     )
     raise SystemExit(1)
 
-print("ONNX rewrite diagnostic passed")
+reporter = _FailureReporter()
+node = (
+    str(test_path)
+    + "::test_rewrite_inserts_exact_custom_op_contract_and_preserves_existing_nodes"
+)
+exit_code = pytest.main(["-q", node], plugins=[reporter])
+if exit_code != pytest.ExitCode.OK:
+    if not reporter.reported:
+        print(
+            "::error title=ONNX pytest diagnostic::"
+            f"pytest exited with code {int(exit_code)} without a test failure report"
+        )
+    raise SystemExit(int(exit_code))
+
+print("ONNX rewrite and pytest diagnostics passed")
