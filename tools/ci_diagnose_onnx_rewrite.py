@@ -118,11 +118,8 @@ except Exception as exc:
     raise SystemExit(1)
 
 reporter = _FailureReporter()
-node = (
-    str(test_path)
-    + "::test_rewrite_inserts_exact_custom_op_contract_and_preserves_existing_nodes"
-)
-exit_code = pytest.main(["-q", node], plugins=[reporter])
+tests_path = Path(__file__).resolve().parents[1] / "tests"
+exit_code = pytest.main(["-q", str(tests_path)], plugins=[reporter])
 if exit_code != pytest.ExitCode.OK:
     if not reporter.reported:
         print(
