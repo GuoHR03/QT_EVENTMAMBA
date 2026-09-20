@@ -400,7 +400,8 @@ class MainWindow(MainWindowLayoutMixin, QWidget):
         return self.viewport_presenter.fit()
 
     def _buffer_prediction_result(self, result, pred_timestamp):
-        self.performance_metrics.record_prediction()
+        latency_ms = result.get("latency_ms") if isinstance(result, dict) else None
+        self.performance_metrics.record_prediction(latency_ms=latency_ms)
         if self.prediction_log_throttle.should_log(result):
             self.append_log(backend_message(result))
         self.predictions.add_result(result, pred_timestamp, self.settings.prediction_mode)

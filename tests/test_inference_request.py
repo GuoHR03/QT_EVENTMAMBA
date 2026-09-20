@@ -95,4 +95,5 @@ def test_process_inference_request_returns_prediction_for_events():
     assert response["values"] == [1.0, 2.0]
     assert response["cropped"] is False
     assert response["mode"] == "center"
+    assert response["inference_ms"] >= 0.0
     assert predictor.predictor.last_event_data.tolist() == [[1.0, 2.0, 3.0]]

@@ -284,7 +284,11 @@ def validate_response_message(message):
             _validate_text(message["code"], "code", max_chars=128)
         return message
 
-    _require_keys(message, ("msg_type", "values", "cropped", "mode"))
+    _require_keys(
+        message,
+        ("msg_type", "values", "cropped", "mode"),
+        ("inference_ms",),
+    )
     _validate_mode(message["mode"])
     if type(message["cropped"]) is not bool:
         raise ZmqProtocolError("cropped must be a boolean")
@@ -297,6 +301,15 @@ def validate_response_message(message):
             raise ZmqProtocolError("prediction values must be numeric")
         if not math.isfinite(float(value)):
             raise ZmqProtocolError("prediction values must be finite")
+    if "inference_ms" in message:
+        inference_ms = message["inference_ms"]
+        if (
+            isinstance(inference_ms, bool)
+            or not isinstance(inference_ms, (int, float, np.number))
+            or not math.isfinite(float(inference_ms))
+            or float(inference_ms) < 0.0
+        ):
+            raise ZmqProtocolError("prediction inference time must be non-negative")
     return message
 
 

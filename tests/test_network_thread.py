@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from backend.NetworkThread import NetworkThread
-from backend.protocol import LOCAL_ROI_CONTEXT
+from backend.protocol import LOCAL_ROI_CONTEXT, LOCAL_TIMING_CONTEXT
 from backend.zmq_protocol import ZmqProtocolError, decode_message, encode_message
 
 
@@ -172,6 +172,11 @@ def test_network_thread_keeps_effective_roi_as_local_response_context():
         "timestamp": 7,
         "cropped": True,
         LOCAL_ROI_CONTEXT: (10, 20, 30, 40),
+        LOCAL_TIMING_CONTEXT: {
+            "window_ready_at": 1.0,
+            "payload_started_at": 1.1,
+            "payload_ready_at": 1.2,
+        },
     }
 
     context = thread._send_payload(payload)
@@ -187,8 +192,38 @@ def test_network_thread_keeps_effective_roi_as_local_response_context():
     )
 
     assert LOCAL_ROI_CONTEXT not in sent
+    assert LOCAL_TIMING_CONTEXT not in sent
     assert result["effective_roi"] == (10, 20, 30, 40)
     thread.stop()
+
+
+def test_network_thread_attaches_latency_breakdown_to_prediction():
+    result = NetworkThread._attach_request_context(
+        {
+            "msg_type": "PREDICTION",
+            "values": [0.5, 0.5],
+            "cropped": True,
+            "mode": "center",
+            "inference_ms": 100.0,
+        },
+        {
+            "timing": {
+                "window_ready_at": 1.0,
+                "payload_started_at": 1.1,
+                "payload_ready_at": 1.2,
+                "request_sent_at": 1.5,
+            }
+        },
+        now=1.8,
+    )
+
+    assert result["latency_ms"] == {
+        "payload_build": pytest.approx(100.0),
+        "queue_wait": pytest.approx(300.0),
+        "zmq": pytest.approx(200.0),
+        "inference": 100.0,
+        "end_to_end": pytest.approx(800.0),
+    }
 
 
 def test_network_thread_rejects_malicious_pickle_response_without_execution(tmp_path):

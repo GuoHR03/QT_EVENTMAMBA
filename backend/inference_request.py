@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 
 from backend.protocol import make_prediction_response, make_status_response
@@ -61,9 +63,12 @@ def process_inference_request(predictor, data):
         return make_config_response(predictor, prediction_mode)
 
     event_data, is_cropped = unpack_events_request(data)
+    started_at = time.perf_counter()
     result = predictor.predictor.predict(event_data)
+    inference_ms = (time.perf_counter() - started_at) * 1000.0
     return make_prediction_response(
         result,
         cropped=is_cropped,
         mode=predictor.current_mode,
+        inference_ms=inference_ms,
     )

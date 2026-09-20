@@ -135,6 +135,7 @@ def test_events_request_round_trip_uses_fixed_binary_layout():
             "values": [0.25, 0.75],
             "cropped": False,
             "mode": "center",
+            "inference_ms": 1.25,
         },
         {
             "msg_type": "PREDICTION",
@@ -151,6 +152,20 @@ def test_events_request_round_trip_uses_fixed_binary_layout():
 )
 def test_response_round_trip(message):
     assert _round_trip_response(message) == message
+
+
+@pytest.mark.parametrize("inference_ms", [-1.0, float("nan"), float("inf"), True])
+def test_prediction_rejects_invalid_inference_timing(inference_ms):
+    message = {
+        "msg_type": "PREDICTION",
+        "values": [0.25, 0.75],
+        "cropped": False,
+        "mode": "center",
+        "inference_ms": inference_ms,
+    }
+
+    with pytest.raises(wire.ZmqProtocolError, match="inference time"):
+        wire.validate_response_message(message)
 
 
 @pytest.mark.parametrize(

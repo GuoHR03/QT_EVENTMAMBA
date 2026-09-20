@@ -16,7 +16,6 @@ class EventFrameRenderer(FrameRenderer):
         self.palette_type = palette_type
         self._lock = Lock()
         self._set_palette_colors(palette_type)
-        self._frame = np.empty((self.height, self.width, 3), dtype=np.uint8)
         self._closed = False
 
     def set_display_settings(self, palette_type=None, fps=None):
@@ -31,40 +30,40 @@ class EventFrameRenderer(FrameRenderer):
         if events is None or len(events) == 0:
             return
 
+        x = np.asarray(events["x"], dtype=np.int64)
+        y = np.asarray(events["y"], dtype=np.int64)
+        valid = (x >= 0) & (x < self.width) & (y >= 0) & (y < self.height)
+        if not np.any(valid):
+            return
+
+        x = x[valid]
+        y = y[valid]
+        polarity = np.asarray(events["p"])[valid]
+        keep = _last_event_per_pixel(x, y, self.width)
+        x = x[keep]
+        y = y[keep]
+        polarity = polarity[keep]
+        positive = polarity > 0
+
         with self._lock:
             if self._closed or self.frame_callback is None:
                 return
-            self._frame[:, :] = self.background
-
-            x = np.asarray(events["x"], dtype=np.int64)
-            y = np.asarray(events["y"], dtype=np.int64)
-            valid = (x >= 0) & (x < self.width) & (y >= 0) & (y < self.height)
-            if not np.any(valid):
-                return
-
-            x = x[valid]
-            y = y[valid]
-            polarity = np.asarray(events["p"])[valid]
-            keep = _last_event_per_pixel(x, y, self.width)
-            x = x[keep]
-            y = y[keep]
-            polarity = polarity[keep]
-
-            positive = polarity > 0
+            # Each callback owns its frame.  Allocating the destination once
+            # avoids filling a reusable buffer and then copying the entire
+            # image before handing it to the asynchronous Qt signal chain.
+            frame = np.empty((self.height, self.width, 3), dtype=np.uint8)
+            frame[:, :] = self.background
             if np.any(~positive):
-                self._frame[y[~positive], x[~positive]] = self.negative
+                frame[y[~positive], x[~positive]] = self.negative
             if np.any(positive):
-                self._frame[y[positive], x[positive]] = self.positive
+                frame[y[positive], x[positive]] = self.positive
 
             callback = self.frame_callback
-            frame = self._frame.copy()
         callback(int(events["t"][-1]), frame)
 
     def reset(self):
         if self._closed:
             return False
-        with self._lock:
-            self._frame[:, :] = self.background
         return True
 
     def close(self):
@@ -88,4 +87,6 @@ def _last_event_per_pixel(x, y, width):
     flat = y * width + x
     _, reversed_indices = np.unique(flat[::-1], return_index=True)
     keep = len(flat) - 1 - reversed_indices
-    return np.sort(keep)
+    # The selected pixels are unique, so their assignment order is irrelevant.
+    # Sorting these indices only adds an O(k log k) pass to every frame.
+    return keep

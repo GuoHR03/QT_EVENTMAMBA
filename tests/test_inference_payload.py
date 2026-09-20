@@ -5,6 +5,7 @@ import numpy as np
 from backend.event_processing import EVENT_CD_DTYPE
 from backend.event_pipeline import InferenceWindow
 from backend.inference_payload import InferencePayloadProcessor
+from backend.protocol import LOCAL_TIMING_CONTEXT
 
 
 def test_inference_payload_processor_builds_one_payload_per_pre_sliced_window():
@@ -78,6 +79,31 @@ def test_inference_window_uses_bound_roi_instead_of_new_runtime_roi():
     assert payload is published[0][0]
     assert published[0][1] == 7
     assert np.all(payload["data"][:, 1] == 0.5)
+
+
+def test_inference_payload_preserves_local_window_and_build_timing(monkeypatch):
+    events = np.zeros(1024, dtype=EVENT_CD_DTYPE)
+    events["x"] = 20
+    events["y"] = 20
+    events["t"] = np.arange(1024)
+    ticks = iter((2.0, 2.25))
+    monkeypatch.setattr("backend.inference_payload.time.perf_counter", lambda: next(ticks))
+    processor = InferencePayloadProcessor(
+        width=640,
+        height=480,
+        target_queue=queue.Queue(),
+        analysis_enabled=lambda: True,
+    )
+
+    payload = processor.process(
+        InferenceWindow(events, (0, 0, 40, 40), 3, ready_at=1.5)
+    )
+
+    assert payload[LOCAL_TIMING_CONTEXT] == {
+        "window_ready_at": 1.5,
+        "payload_started_at": 2.0,
+        "payload_ready_at": 2.25,
+    }
 
 
 def test_inference_payload_publisher_can_reject_stale_generation():

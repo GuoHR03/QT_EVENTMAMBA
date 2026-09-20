@@ -76,13 +76,17 @@ class EventViewportPresenter:
             overlay.draw(q_img, img_timestamp, width, height)
 
         pixmap = QPixmap.fromImage(q_img)
-        ports.camera_image_label.setPixmap(
-            pixmap.scaled(
-                ports.camera_image_label.size(),
+        target_size = ports.camera_image_label.size()
+        # Qt still allocates a new pixmap for scaled(), even when the source
+        # already matches the viewport.  Sensor-native and fitted views hit
+        # this fast path frequently.
+        if target_size.isValid() and pixmap.size() != target_size:
+            pixmap = pixmap.scaled(
+                target_size,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.FastTransformation,
             )
-        )
+        ports.camera_image_label.setPixmap(pixmap)
 
     def elide_input_file_name(self):
         ports = self.ports

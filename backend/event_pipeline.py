@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import time
 from typing import Any, Optional, Tuple
 
 import numpy as np
@@ -20,6 +21,7 @@ class InferenceWindow:
     events: np.ndarray
     roi: Optional[Tuple[int, int, int, int]]
     roi_generation: Any
+    ready_at: float = 0.0
 
 
 class EventWindowSlicer:
@@ -186,6 +188,7 @@ class EventPipeline:
                     events=chunk,
                     roi=roi,
                     roi_generation=roi_generation,
+                    ready_at=time.perf_counter(),
                 )
             if self.inference_publisher is not None:
                 published = self.inference_publisher(payload, roi_generation)

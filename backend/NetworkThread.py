@@ -1,11 +1,12 @@
 # Windows inference client
 import queue
+import time
 from threading import Event, Lock
 
 import zmq
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from backend.protocol import LOCAL_ROI_CONTEXT
+from backend.protocol import LOCAL_ROI_CONTEXT, LOCAL_TIMING_CONTEXT
 from backend.settings import (
     DEFAULT_INFERENCE_HOST,
     DEFAULT_INFERENCE_PORT,
@@ -191,21 +192,62 @@ class NetworkThread(QThread):
     def _send_payload(self, payload):
         request_context = {}
         wire_payload = payload
-        if isinstance(payload, dict) and LOCAL_ROI_CONTEXT in payload:
+        if isinstance(payload, dict) and (
+            LOCAL_ROI_CONTEXT in payload or LOCAL_TIMING_CONTEXT in payload
+        ):
             wire_payload = dict(payload)
-            request_context["roi"] = wire_payload.pop(LOCAL_ROI_CONTEXT)
+            if LOCAL_ROI_CONTEXT in wire_payload:
+                request_context["roi"] = wire_payload.pop(LOCAL_ROI_CONTEXT)
+            if LOCAL_TIMING_CONTEXT in wire_payload:
+                timing = dict(wire_payload.pop(LOCAL_TIMING_CONTEXT))
+                timing["request_sent_at"] = time.perf_counter()
+                request_context["timing"] = timing
         send_request(self.socket, wire_payload)
         return request_context
 
     @staticmethod
-    def _attach_request_context(result, request_context):
+    def _attach_request_context(result, request_context, now=None):
         if (
             isinstance(result, dict)
             and result.get("msg_type") == "PREDICTION"
-            and "roi" in request_context
         ):
             result = dict(result)
-            result["effective_roi"] = request_context["roi"]
+            if "roi" in request_context:
+                result["effective_roi"] = request_context["roi"]
+            timing = request_context.get("timing")
+            if timing is not None:
+                response_received_at = (
+                    time.perf_counter() if now is None else float(now)
+                )
+                request_sent_at = float(
+                    timing.get("request_sent_at", response_received_at)
+                )
+                payload_ready_at = float(
+                    timing.get("payload_ready_at", request_sent_at)
+                )
+                payload_started_at = float(
+                    timing.get("payload_started_at", payload_ready_at)
+                )
+                window_ready_at = float(
+                    timing.get("window_ready_at", payload_started_at)
+                )
+                round_trip_ms = max(
+                    0.0, (response_received_at - request_sent_at) * 1000.0
+                )
+                inference_ms = max(0.0, float(result.get("inference_ms", 0.0)))
+                result["latency_ms"] = {
+                    "payload_build": max(
+                        0.0, (payload_ready_at - payload_started_at) * 1000.0
+                    ),
+                    "queue_wait": max(
+                        0.0, (request_sent_at - payload_ready_at) * 1000.0
+                    ),
+                    "zmq": max(0.0, round_trip_ms - inference_ms),
+                    "inference": inference_ms,
+                    "end_to_end": max(
+                        0.0, (response_received_at - window_ready_at) * 1000.0
+                    ),
+                }
         return result
 
     def _close_socket(self):

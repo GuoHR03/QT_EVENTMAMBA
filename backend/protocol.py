@@ -2,6 +2,7 @@ PREDICTION_RESPONSE = "PREDICTION"
 STATUS_RESPONSE = "STATUS"
 ERROR_RESPONSE = "ERROR"
 LOCAL_ROI_CONTEXT = "_eventmamba_effective_roi"
+LOCAL_TIMING_CONTEXT = "_eventmamba_timing"
 
 
 def make_status_response(message, **extra):
@@ -16,10 +17,13 @@ def make_error_response(message, **extra):
     return payload
 
 
-def make_prediction_response(values, cropped=True, mode=None):
-    return {
+def make_prediction_response(values, cropped=True, mode=None, inference_ms=None):
+    response = {
         "msg_type": PREDICTION_RESPONSE,
         "values": list(values),
         "cropped": bool(cropped),
         "mode": mode,
     }
+    if inference_ms is not None:
+        response["inference_ms"] = max(0.0, float(inference_ms))
+    return response
