@@ -70,6 +70,9 @@ jobs:
             if ($failedFiles.Count -gt 0) {
               $names = $failedFiles -join ', '
               Write-Output "::error title=pytest failing files::$names"
+              if ($failedFiles -contains 'test_onnx_hierarchical_fps_rewrite.py') {
+                & python tools/ci_diagnose_onnx_rewrite.py
+              }
               $failedTests = @()
               foreach ($fileName in $failedFiles) {
                 $testPath = Join-Path 'tests' $fileName
